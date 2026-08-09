@@ -58,7 +58,7 @@ object TorrentEngine {
             setBoolean(settings_pack.bool_types.enable_incoming_tcp.swigValue(), true)
             setBoolean(settings_pack.bool_types.enable_outgoing_utp.swigValue(), true)
             setBoolean(settings_pack.bool_types.enable_incoming_utp.swigValue(), true)
-            setString(settings_pack.string_types.listen_interfaces.swigValue(), "0.0.0.0:0,[::]:0")
+            setString(settings_pack.string_types.listen_interfaces.swigValue(), "0.0.0.0:0")
             setString(
                 settings_pack.string_types.dht_bootstrap_nodes.swigValue(),
                 DHT_BOOTSTRAP_NODES.joinToString(",") { "${it.first}:${it.second}" }
