@@ -22,27 +22,29 @@ object JavaPeerClient {
         if (all.isEmpty()) return
         Thread {
             if (!busy.compareAndSet(false, true)) return@Thread
+            val executor = java.util.concurrent.Executors.newFixedThreadPool(3)
             try {
                 val infohash = hexToBytes(hex)
-                var attempt = 0
-                for ((ip, p) in all) {
-                    if (attempt >= 8) break
-                    val key = "$ip:$p"
-                    if (!tried.add(key)) continue
-                    attempt++
-                    try {
-                        val info = fetchFromPeer(ip, p, infohash, peerId)
-                        if (info != null) {
-                            TorrentEngine.recordJavaAnnounce("元数据: 抓取成功 ${info.size}字节 ($key)")
-                            TorrentManager.adoptTorrentFile(hex, info)
-                            return@Thread
+                val fresh = all.filter { tried.add("${it.first}:${it.second}") }.take(8)
+                if (fresh.isEmpty()) return@Thread
+                val success = AtomicBoolean(false)
+                for ((ip, p) in fresh) {
+                    if (success.get()) break
+                    executor.submit {
+                        if (success.get()) return@submit
+                        try {
+                            val info = fetchFromPeer(ip, p, infohash, peerId)
+                            if (info != null && success.compareAndSet(false, true)) {
+                                TorrentEngine.recordJavaAnnounce("元数据: 抓取成功 ${info.size}字节 ($ip:$p)")
+                                TorrentManager.adoptTorrentFile(hex, info)
+                            }
+                        } catch (e: Exception) {
                         }
-                        TorrentEngine.recordJavaAnnounce("元数据: $key 无结果")
-                    } catch (e: Exception) {
-                        TorrentEngine.recordJavaAnnounce("元数据: $key 异常 ${e.message}")
                     }
                 }
-                TorrentEngine.recordJavaAnnounce("元数据: 本轮未获元数据")
+                executor.shutdown()
+                executor.awaitTermination(90, java.util.concurrent.TimeUnit.SECONDS)
+                if (!success.get()) TorrentEngine.recordJavaAnnounce("元数据: 本轮未获元数据")
             } finally {
                 busy.set(false)
             }
@@ -77,7 +79,7 @@ object JavaPeerClient {
         return try {
             socket = Socket()
             socket.connect(InetSocketAddress(ip, port), 8000)
-            socket.soTimeout = 20000
+            socket.soTimeout = 12000
             socket.tcpNoDelay = true
             val sess = Session(socket.getInputStream(), socket.getOutputStream(), null, null, Pending(), false)
             sess.output.write(buildHandshake(infohash, peerId))
@@ -99,7 +101,7 @@ object JavaPeerClient {
         return try {
             socket = Socket()
             socket.connect(InetSocketAddress(ip, port), 8000)
-            socket.soTimeout = 20000
+            socket.soTimeout = 12000
             socket.tcpNoDelay = true
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
@@ -190,7 +192,7 @@ object JavaPeerClient {
         var got = false
         var requested = false
         val pieces = mutableMapOf<Int, ByteArray>()
-        val deadline = System.currentTimeMillis() + 60000
+        val deadline = System.currentTimeMillis() + 25000
         while (System.currentTimeMillis() < deadline) {
             if (got && !requested) {
                 requested = true
