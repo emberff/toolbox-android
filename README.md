@@ -2,6 +2,10 @@
 
 一个模块化的 Android 工具应用。主页为模块选择界面，便于后续持续扩展新工具。
 
+## 下载
+
+最新版本 APK 请前往 [Releases 页面](https://github.com/emberff/toolbox-android/releases) 下载。
+
 ## 功能模块
 
 ### 1. X 视频下载
