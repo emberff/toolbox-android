@@ -79,11 +79,15 @@ object JavaTrackerAnnouncer {
                         r.isEmpty() -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回0个peer")
                         else -> {
                             allPeers.addAll(r)
-                            val n = injectPeers(h, r)
-                            injected += n
-                            TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回${r.size}个 注入$n")
+                            TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回${r.size}个")
                         }
                     }
+                }
+                val reachable = probeReachable(allPeers.distinct().filter { it.second in 1..65535 })
+                TorrentEngine.recordJavaAnnounce("连接探测: 共${allPeers.size}个 可达${reachable.size}个 " + reachable.take(8).joinToString(" ") { "${it.first}:${it.second}" })
+                if (reachable.isNotEmpty()) {
+                    injected += injectPeers(h, reachable)
+                    TorrentEngine.recordJavaAnnounce("注入可达peer: ${injected}个")
                 }
                 val st2 = try { h.status() } catch (e: Exception) { null }
                 val pi = try { h.peerInfo() } catch (e: Exception) { null }
@@ -92,7 +96,6 @@ object JavaTrackerAnnouncer {
                 TorrentEngine.recordJavaAnnounce("注入后: $lp Peers列表=$pc")
                 if (allPeers.isNotEmpty()) JavaPeerClient.attempt(hex, allPeers, pid)
                 if (injected == 0) TorrentEngine.recordJavaAnnounce("java上报: 本轮未注入peer")
-                TorrentEngine.recordJavaAnnounce("java上报: 累计注入${injected}个")
             } catch (ignored: Exception) {
             } finally {
                 announcing.remove(key)
@@ -338,6 +341,38 @@ object JavaTrackerAnnouncer {
     private fun readIntBE(b: ByteArray, off: Int): Int {
         return ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or
             ((b[off + 2].toInt() and 0xff) shl 8) or (b[off + 3].toInt() and 0xff)
+    }
+
+    private val reachPool = java.util.concurrent.Executors.newFixedThreadPool(6)
+
+    fun probeReachable(peers: List<Pair<String, Int>>): List<Pair<String, Int>> {
+        if (peers.isEmpty()) return emptyList()
+        val candidates = peers.distinct().take(24)
+        val result = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, Int>>()
+        val futures = mutableListOf<java.util.concurrent.Future<*>>()
+        for ((ip, p) in candidates) {
+            futures.add(reachPool.submit {
+                var s: java.net.Socket? = null
+                try {
+                    s = java.net.Socket()
+                    s.connect(java.net.InetSocketAddress(ip, p), 1500)
+                    result.add(ip to p)
+                } catch (ignored: Exception) {
+                } finally {
+                    try {
+                        s?.close()
+                    } catch (ignored: Exception) {
+                    }
+                }
+            })
+        }
+        for (f in futures) {
+            try {
+                f.get(3, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (ignored: Exception) {
+            }
+        }
+        return result.toList()
     }
 
     private fun injectPeers(h: TorrentHandle, peers: List<Pair<String, Int>>): Int {
