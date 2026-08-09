@@ -276,13 +276,27 @@ class TorrentActivity : AppCompatActivity() {
         TorrentManager.testConnectivity { result ->
             runOnUiThread {
                 tvEngine.text = result.trim()
-                AlertDialog.Builder(this)
-                    .setTitle("网络连通性测试")
-                    .setMessage(result)
-                    .setPositiveButton("确定", null)
-                    .show()
+                showResultDialog("网络连通性测试", result)
             }
         }
+    }
+
+    private fun showResultDialog(title: String, result: String) {
+        val tv = TextView(this)
+        tv.textSize = 12f
+        tv.setTextIsSelectable(true)
+        tv.text = result
+        tv.setMaxHeight((resources.displayMetrics.heightPixels * 0.6).toInt())
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(tv)
+            .setPositiveButton("复制全部") { _, _ ->
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText(title, result))
+                android.widget.Toast.makeText(this, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("关闭", null)
+            .show()
     }
 
     private fun runDiagnostics() {
@@ -291,22 +305,7 @@ class TorrentActivity : AppCompatActivity() {
         TorrentManager.buildDiagnostics { result ->
             runOnUiThread {
                 tvEngine.text = "诊断完成"
-                val tv = TextView(this)
-                tv.textSize = 12f
-                tv.setTextIsSelectable(true)
-                tv.text = result
-                val maxH = (resources.displayMetrics.heightPixels * 0.6).toInt()
-                tv.setMaxHeight(maxH)
-                AlertDialog.Builder(this)
-                    .setTitle("引擎诊断")
-                    .setView(tv)
-                    .setPositiveButton("复制全部") { _, _ ->
-                        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("diagnostics", result))
-                        android.widget.Toast.makeText(this, "已复制", android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                    .setNegativeButton("关闭", null)
-                    .show()
+                showResultDialog("引擎诊断", result)
             }
         }
     }
