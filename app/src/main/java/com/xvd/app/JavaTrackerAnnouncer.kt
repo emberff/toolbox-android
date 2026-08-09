@@ -57,21 +57,49 @@ object JavaTrackerAnnouncer {
                 val port = TorrentEngine.nativeListenPort
                 var injected = 0
                 for (url in trackerList()) {
-                    val peers = announceOnce(url, infohash, pid, port)
-                    if (peers != null && peers.isNotEmpty()) {
-                        injected += injectPeers(h, peers)
+                    val r = announceOnce(url, infohash, pid, port)
+                    when {
+                        r == null -> TorrentEngine.recordEngineInfo("java上报 ${compactUrl(url)}: 网络失败")
+                        r.isEmpty() -> TorrentEngine.recordEngineInfo("java上报 ${compactUrl(url)}: 返回0个peer")
+                        else -> {
+                            val n = injectPeers(h, r)
+                            injected += n
+                            TorrentEngine.recordEngineInfo("java上报 ${compactUrl(url)}: 返回${r.size}个 注入$n")
+                        }
                     }
                 }
-                if (injected > 0) {
-                    TorrentEngine.recordEngineInfo("java上报成功, 注入 $injected 个peer")
-                } else {
-                    TorrentEngine.recordEngineInfo("java上报: 无peer返回")
-                }
+                if (injected == 0) TorrentEngine.recordEngineInfo("java上报: 本轮未注入peer")
             } catch (ignored: Exception) {
             } finally {
                 announcing.remove(key)
             }
         }.start()
+    }
+
+    fun probeSources(): List<Pair<String, String>> {
+        val pid = ensurePeerId()
+        val fake = hexToBytes("0000000000000000000000000000000000000000")
+        val port = TorrentEngine.nativeListenPort
+        return trackerList().map { url ->
+            val r = announceOnce(url, fake, pid, port)
+            val result = when {
+                r == null -> "失败(超时/网络)"
+                r.isEmpty() -> "200 返回0个peer"
+                else -> "200 返回${r.size}个peer"
+            }
+            compactUrl(url) to result
+        }
+    }
+
+    private fun compactUrl(url: String): String {
+        return try {
+            val u = java.net.URI(url)
+            var port = u.port
+            if (port == -1) port = if (u.scheme == "https") 443 else 80
+            "${u.host}:$port[${if (u.scheme == "https") "s" else "h"}]"
+        } catch (e: Exception) {
+            url
+        }
     }
 
     private fun announceOnce(

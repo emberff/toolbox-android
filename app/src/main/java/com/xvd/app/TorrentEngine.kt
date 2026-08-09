@@ -53,6 +53,7 @@ object TorrentEngine {
 
     private fun recordError(msg: String) {
         synchronized(_engineErrors) {
+            if (_engineErrors.lastOrNull() == msg) return
             _engineErrors.addLast(msg)
             while (_engineErrors.size > 8) _engineErrors.removeFirst()
         }

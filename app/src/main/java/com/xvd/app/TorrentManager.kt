@@ -337,6 +337,10 @@ object TorrentManager {
                     if (udpReachable(host, port)) "可达" else "超时/不可达"
                 ).append("\n")
             }
+            sb.append("--- Tracker 上报源测试 (java HTTP) ---\n")
+            for ((url, result) in JavaTrackerAnnouncer.probeSources()) {
+                sb.append("$url → $result\n")
+            }
             callback(sb.toString())
         }.start()
     }
