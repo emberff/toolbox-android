@@ -24,14 +24,21 @@ object TorrentManager {
 
     private val PUBLIC_TRACKERS = listOf(
         "udp://tracker.opentrackr.org:1337/announce",
+        "https://tracker.tamersunion.org:443/announce",
         "udp://open.demonii.com:1337/announce",
         "udp://tracker.openbittorrent.com:6969/announce",
         "udp://exodus.desync.com:6969/announce",
-        "https://tracker.tamersunion.org:443/announce",
         "udp://tracker.torrent.eu.org:451/announce",
         "udp://open.stealth.si:80/announce",
         "udp://explodie.org:6969/announce",
-        "udp://tracker.moeking.me:6969/announce"
+        "udp://tracker.moeking.me:6969/announce",
+        "https://opentracker.i2p.rocks:443/announce",
+        "https://tracker.gbitt.info:443/announce",
+        "https://p4p.arenabg.com:1337/announce",
+        "http://tracker.opentrackr.org:1337/announce",
+        "udp://tracker.bittor.pw:1337/announce",
+        "udp://tracker.leechers-paradise.org:6969/announce",
+        "udp://tracker.dler.org:6969/announce"
     )
 
     val torrents = MutableStateFlow<List<TorrentItem>>(emptyList())

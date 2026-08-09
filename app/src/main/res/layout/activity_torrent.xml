@@ -29,6 +29,16 @@
             android:textStyle="bold" />
     </LinearLayout>
 
+    <TextView
+        android:id="@+id/tvEngineStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="20dp"
+        android:paddingBottom="6dp"
+        android:text="引擎: -"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
+
     <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

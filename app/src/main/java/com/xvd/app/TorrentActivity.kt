@@ -23,6 +23,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -96,6 +97,19 @@ class TorrentActivity : AppCompatActivity() {
                         adapter.submit(list)
                         tvEmpty.visibility =
                             if (list.isEmpty()) View.VISIBLE else View.GONE
+                    }
+                }
+                launch {
+                    val tvEngine = findViewById<TextView>(R.id.tvEngineStatus)
+                    while (true) {
+                        val dht = if (TorrentEngine.isRunning) {
+                            if (TorrentEngine.dhtRunning) "运行" else "未运行"
+                        } else {
+                            "-"
+                        }
+                        val ports = if (TorrentEngine.isRunning) TorrentEngine.listenPorts else "-"
+                        tvEngine.text = "引擎: ${if (TorrentEngine.isRunning) "运行" else "未运行"} · DHT: $dht · 监听: $ports"
+                        delay(2000)
                     }
                 }
             }
