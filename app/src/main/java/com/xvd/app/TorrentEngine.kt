@@ -50,6 +50,7 @@ object TorrentEngine {
             )
             setString(settings_pack.string_types.user_agent.swigValue(), "toolbox/1.1.0 libtorrent/1.2")
         }
+        TorrentSettings.applyTo(settings)
         val sm = SessionManager()
         sm.addListener(listener)
         sm.start(SessionParams(settings))
@@ -87,6 +88,17 @@ object TorrentEngine {
             if (sm.isRunning()) sm.stop()
         }
         session = null
+    }
+
+    fun restart() {
+        Thread {
+            try {
+                stop()
+                Thread.sleep(300)
+                start()
+            } catch (ignored: Exception) {
+            }
+        }.start()
     }
 
     fun add(params: AddTorrentParams) {

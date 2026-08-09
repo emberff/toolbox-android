@@ -9,11 +9,15 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.view.LayoutInflater
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.EditText
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -23,6 +27,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.switchmaterial.SwitchMaterial
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -60,6 +65,8 @@ class TorrentActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.btnAddMagnet).setOnClickListener { addMagnet() }
         findViewById<MaterialButton>(R.id.btnPickFile).setOnClickListener { pickFile() }
         btnStorage.setOnClickListener { requestStorageAccess() }
+        findViewById<MaterialButton>(R.id.btnNetworkTest).setOnClickListener { runNetworkTest() }
+        findViewById<MaterialButton>(R.id.btnProxy).setOnClickListener { showProxyDialog() }
 
         adapter = TorrentAdapter(
             emptyList(),
@@ -260,6 +267,64 @@ class TorrentActivity : AppCompatActivity() {
         } catch (e: Exception) {
             toast("没有可用的播放器")
         }
+    }
+
+    private fun runNetworkTest() {
+        val tvEngine = findViewById<TextView>(R.id.tvEngineStatus)
+        tvEngine.text = "网络测试中…"
+        TorrentManager.testConnectivity { result ->
+            runOnUiThread {
+                tvEngine.text = result.trim()
+                AlertDialog.Builder(this)
+                    .setTitle("网络连通性测试")
+                    .setMessage(result)
+                    .setPositiveButton("确定", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun showProxyDialog() {
+        val cfg = TorrentSettings.proxyConfig()
+        val view = LayoutInflater.from(this).inflate(R.layout.dialog_proxy, null)
+        val swEnable = view.findViewById<SwitchMaterial>(R.id.swProxyEnable)
+        val spType = view.findViewById<Spinner>(R.id.spProxyType)
+        val etHost = view.findViewById<EditText>(R.id.etProxyHost)
+        val etPort = view.findViewById<EditText>(R.id.etProxyPort)
+        val etUser = view.findViewById<EditText>(R.id.etProxyUser)
+        val etPass = view.findViewById<EditText>(R.id.etProxyPass)
+
+        val types = arrayOf("SOCKS5", "HTTP")
+        spType.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, types).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        spType.setSelection(if (cfg.type == "http") 1 else 0)
+        swEnable.isChecked = cfg.enabled
+        etHost.setText(cfg.host)
+        etPort.setText(cfg.port)
+        etUser.setText(cfg.user)
+        etPass.setText(cfg.pass)
+
+        AlertDialog.Builder(this)
+            .setTitle("代理设置")
+            .setView(view)
+            .setPositiveButton("保存并重启引擎") { _, _ ->
+                val type = if (spType.selectedItemPosition == 1) "http" else "socks5"
+                TorrentSettings.saveProxy(
+                    TorrentSettings.ProxyConfig(
+                        enabled = swEnable.isChecked,
+                        type = type,
+                        host = etHost.text.toString().trim(),
+                        port = etPort.text.toString().trim(),
+                        user = etUser.text.toString().trim(),
+                        pass = etPass.text.toString().trim()
+                    )
+                )
+                toast("代理已保存，正在重启引擎…")
+                TorrentManager.restartEngine()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun toast(msg: String) {

@@ -46,6 +46,7 @@ object TorrentManager {
     fun init(context: Context) {
         if (::appContext.isInitialized) return
         appContext = context.applicationContext
+        TorrentSettings.init(appContext)
         load()
     }
 
@@ -214,6 +215,48 @@ object TorrentManager {
         File(appContext.filesDir, "torrents/$hex.torrent").delete()
         emit()
         persist()
+    }
+
+    fun restartEngine() {
+        Thread {
+            try {
+                saveAllResume()
+                TorrentEngine.stop()
+                Thread.sleep(300)
+                TorrentEngine.start()
+                resumeAll()
+            } catch (ignored: Exception) {
+            }
+        }.start()
+    }
+
+    fun testConnectivity(callback: (String) -> Unit) {
+        Thread {
+            val sb = StringBuilder()
+            val targets = listOf(
+                "github.com" to 443,
+                "tracker.dler.org" to 443,
+                "tracker.opentrackr.org" to 443,
+                "p4p.arenabg.com" to 1337
+            )
+            for ((host, port) in targets) {
+                sb.append("$host:$port → ").append(
+                    if (tcpReachable(host, port)) "可达" else "超时/不可达"
+                ).append("\n")
+            }
+            callback(sb.toString())
+        }.start()
+    }
+
+    private fun tcpReachable(host: String, port: Int, timeoutMs: Int = 4000): Boolean {
+        return try {
+            val s = java.net.Socket()
+            s.connect(java.net.InetSocketAddress(host, port), timeoutMs)
+            s.close()
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     fun resumeAll() {
