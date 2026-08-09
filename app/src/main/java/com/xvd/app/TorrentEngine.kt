@@ -103,6 +103,41 @@ object TorrentEngine {
                 s.add_dht_node(string_int_pair(host, port))
             } catch (ignored: Exception) {
             }
+            val ip = resolveHostIp(host)
+            if (ip != null) {
+                try {
+                    s.add_dht_node(string_int_pair(ip, port))
+                } catch (ignored: Exception) {
+                }
+            }
+        }
+    }
+
+    fun resolveHostIp(host: String): String? {
+        return try {
+            val addrs = java.net.InetAddress.getAllByName(host)
+            addrs.firstOrNull { it is java.net.Inet4Address }?.hostAddress
+                ?: addrs.firstOrNull()?.hostAddress
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun rewriteTrackerUrlToIp(url: String): String? {
+        return try {
+            val u = java.net.URI(url)
+            val scheme = u.scheme ?: return null
+            if (scheme == "https") return null
+            val host = u.host ?: return null
+            if (host.contains(":") || Regex("^[0-9.]+$").matches(host)) return null
+            val ip = resolveHostIp(host) ?: return null
+            var port = u.port
+            if (port == -1) port = if (scheme == "http") 80 else 0
+            val path = u.rawPath ?: "/"
+            val query = if (u.rawQuery != null) "?${u.rawQuery}" else ""
+            "$scheme://$ip:$port$path$query"
+        } catch (e: Exception) {
+            null
         }
     }
 

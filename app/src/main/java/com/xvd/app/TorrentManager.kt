@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import com.frostwire.jlibtorrent.AddTorrentParams
+import com.frostwire.jlibtorrent.AnnounceEntry
 import com.frostwire.jlibtorrent.Priority
 import com.frostwire.jlibtorrent.TorrentHandle
 import com.frostwire.jlibtorrent.TorrentInfo
@@ -98,6 +99,7 @@ object TorrentManager {
             atp.savePath(saveDirPath())
             withPublicTrackers(atp)
             TorrentEngine.add(atp)
+            addIpTrackerVariants(hex)
             emit()
             persist()
             0
@@ -149,6 +151,7 @@ object TorrentManager {
             }
         }
         TorrentEngine.add(atp)
+        addIpTrackerVariants(hex)
         emit()
         persist()
         return 0
@@ -199,6 +202,30 @@ object TorrentManager {
             atp.trackers(current)
         } catch (ignored: Exception) {
         }
+    }
+
+    fun addIpTrackerVariants(hex: String) {
+        Thread {
+            try {
+                Thread.sleep(1500)
+                val h = TorrentEngine.find(hex) ?: return@Thread
+                if (!h.isValid()) return@Thread
+                val current = h.trackers().map { it.url() }.toMutableList()
+                val toAdd = mutableListOf<String>()
+                for (t in current) {
+                    val ipUrl = TorrentEngine.rewriteTrackerUrlToIp(t)
+                    if (ipUrl != null && ipUrl !in current && ipUrl !in toAdd) toAdd.add(ipUrl)
+                }
+                for (url in toAdd) {
+                    try {
+                        h.addTracker(AnnounceEntry(url))
+                    } catch (ignored: Exception) {
+                    }
+                }
+                if (toAdd.isNotEmpty()) TorrentEngine.forceReannounce(hex)
+            } catch (ignored: Exception) {
+            }
+        }.start()
     }
 
     fun pause(hex: String) {
@@ -385,6 +412,7 @@ object TorrentManager {
                 }
                 withPublicTrackers(atp)
                 TorrentEngine.add(atp)
+                addIpTrackerVariants(item.infoHash)
             } catch (ignored: Exception) {
             }
         }
