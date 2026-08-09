@@ -252,6 +252,22 @@ object TorrentManager {
                     val working = trackers.count { it.isVerified() }
                     sb.append("  状态: ${item.state} · 发现${st.listPeers()} 连接${st.numPeers()} 种子${st.numSeeds()}\n")
                     sb.append("  Tracker: 共${trackers.size}个, 成功上报${working}个\n")
+                    val shown = trackers.take(5)
+                    for (t in shown) {
+                        try {
+                            val verified = if (t.isVerified()) "已验证" else "未验证"
+                            val eps = t.endpoints()
+                            val epInfo = eps.joinToString(" | ") { e ->
+                                val err = if (e.lastError() != null) e.lastError().message() else ""
+                                val n = e.nextAnnounce()
+                                val nextSec = if (n > 1_000_000_000_000L) (n - System.currentTimeMillis()) / 1000 else n / 1000
+                                "fails=${e.fails()} 工作=${if (e.isWorking()) "是" else "否"} 上报中=${if (e.updating()) "是" else "否"} 下次=${nextSec}s 状态=${e.message().ifBlank { "-" }} err=${err.ifBlank { "-" }} 抄员=${e.scrapeComplete()}/${e.scrapeIncomplete()}"
+                            }
+                            sb.append("    [$verified] ${t.url().take(60)}\n      $epInfo\n")
+                        } catch (e: Exception) {
+                            sb.append("    (tracker读取失败: ${e.message})\n")
+                        }
+                    }
                 } catch (e: Exception) {
                     sb.append("  读取状态失败: ${e.message}\n")
                 }
