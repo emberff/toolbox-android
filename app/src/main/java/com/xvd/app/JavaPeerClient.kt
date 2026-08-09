@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
+import java.math.BigInteger
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.Collections
@@ -48,93 +49,181 @@ object JavaPeerClient {
         }.start()
     }
 
+    private class Session(
+        val input: InputStream,
+        val output: OutputStream,
+        val enc: RC4?,
+        val dec: RC4?,
+        val pending: Pending,
+        val encrypted: Boolean
+    )
+
     private fun fetchFromPeer(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray): ByteArray? {
+        val enc = try {
+            fetchEncrypted(ip, port, infohash, peerId)
+        } catch (e: Exception) {
+            null
+        }
+        if (enc != null) return enc
+        return try {
+            fetchPlain(ip, port, infohash, peerId)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun fetchPlain(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray): ByteArray? {
         var socket: Socket? = null
         return try {
             socket = Socket()
             socket.connect(InetSocketAddress(ip, port), 8000)
-            socket.soTimeout = 15000
+            socket.soTimeout = 20000
             socket.tcpNoDelay = true
-            val input = socket.getInputStream()
-            val output = socket.getOutputStream()
-
-            sendHandshake(output, infohash, peerId)
-            val reply = ByteArray(68)
-            readExact(input, reply, 0, 68)
+            val sess = Session(socket.getInputStream(), socket.getOutputStream(), null, null, Pending(), false)
+            sess.output.write(buildHandshake(infohash, peerId))
+            sess.output.flush()
+            val reply = readDecrypted(sess, 68) ?: return null
             if (reply[0].toInt() != 19 || reply[1].toInt() != 'B'.code || reply[2].toInt() != 'i'.code) return null
             if (!reply.copyOfRange(28, 48).contentEquals(infohash)) return null
-
-            sendExtHandshake(output)
-
-            var metadataSize = -1
-            var utMetadata = -1
-            var extHandshakeGot = false
-            val pieces = mutableMapOf<Int, ByteArray>()
-            var outstanding = 0
-            val deadline = System.currentTimeMillis() + 60000
-            var sent = 0
-
-            while (System.currentTimeMillis() < deadline) {
-                val msg = readMessage(input) ?: return null
-                if (msg.isEmpty()) continue
-                val id = msg[0].toInt() and 0xff
-                when {
-                    id == 20 -> {
-                        if (msg.size < 2) continue
-                        val extId = msg[1].toInt() and 0xff
-                        val payload = msg.copyOfRange(2, msg.size)
-                        if (extId == 0) {
-                            metadataSize = findBencInt(payload, "metadata_size") ?: -1
-                            utMetadata = findBencInt(payload, "ut_metadata") ?: -1
-                            if (metadataSize > 0 && utMetadata > 0) {
-                                extHandshakeGot = true
-                                val total = (metadataSize + PIECE_SIZE - 1) / PIECE_SIZE
-                                sendInterested(output)
-                                while (outstanding < 6 && sent < total) {
-                                    sendMetadataRequest(output, utMetadata, sent)
-                                    outstanding++
-                                    sent++
-                                }
-                            }
-                        } else if (extId == utMetadata) {
-                            val pr = parseMetadataPiece(payload)
-                            if (pr != null && pr.second.isNotEmpty()) {
-                                val (piece, data) = pr
-                                if (!pieces.containsKey(piece)) {
-                                    pieces[piece] = data
-                                    outstanding = maxOf(0, outstanding - 1)
-                                    val total = (metadataSize + PIECE_SIZE - 1) / PIECE_SIZE
-                                    if (pieces.size < total && sent < total) {
-                                        sendMetadataRequest(output, utMetadata, sent)
-                                        outstanding++
-                                        sent++
-                                    }
-                                    if (pieces.size >= total) break
-                                }
-                            }
-                        }
-                    }
-                    id == 2 -> Unit
-                    id == 1 -> Unit
-                    id == 0 -> Unit
-                    id == 3 -> Unit
-                }
-                if (!extHandshakeGot) {
-                    val total = (metadataSize + PIECE_SIZE - 1) / PIECE_SIZE
-                    if (pieces.size >= total && total > 0) break
-                }
-            }
-
-            if (pieces.isEmpty()) return null
-            val info = assemble(metadataSize, pieces) ?: return null
-            if (!isValidInfo(info)) return null
-            info
+            metadataExchange(sess, infohash, peerId)
         } finally {
             try {
                 socket?.close()
             } catch (ignored: Exception) {
             }
         }
+    }
+
+    private fun fetchEncrypted(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray): ByteArray? {
+        var socket: Socket? = null
+        return try {
+            socket = Socket()
+            socket.connect(InetSocketAddress(ip, port), 8000)
+            socket.soTimeout = 20000
+            socket.tcpNoDelay = true
+            val input = socket.getInputStream()
+            val output = socket.getOutputStream()
+
+            val rnd = java.security.SecureRandom()
+            val prime = BigInteger(1, hexToBytes(DH_PRIME_HEX))
+            val secret = BigInteger(160, rnd)
+            val pub = BigInteger.TWO.modPow(secret, prime)
+            val pubBytes = export96(pub)
+            val pad1 = rnd.nextInt(512)
+            output.write(pubBytes)
+            output.write(randBytes(rnd, pad1))
+            output.flush()
+
+            val peerPub = ByteArray(96)
+            readExact(input, peerPub, 0, 96)
+            val peerKey = BigInteger(1, peerPub)
+            if (peerKey < BigInteger.TWO || peerKey >= prime - BigInteger.ONE) return null
+            val shared = peerKey.modPow(secret, prime)
+            val s = export96(shared)
+
+            val outKey = sha1(concat3("keyA".toByteArray(), s, infohash))
+            val inKey = sha1(concat3("keyB".toByteArray(), s, infohash))
+            val enc = RC4(outKey)
+            enc.discard(1024)
+            val dec = RC4(inKey)
+            dec.discard(1024)
+
+            val syncHash = sha1(concat("req1".toByteArray(), s))
+            val obfsc = xor(sha1(concat("req2".toByteArray(), infohash)), sha1(concat("req3".toByteArray(), s)))
+            val pad2 = rnd.nextInt(512)
+            val tail = ByteArray(16 + pad2)
+            rnd.nextBytes(tail)
+            java.util.Arrays.fill(tail, 0, 8, 0)
+            putInt(tail, 8, 0x02)
+            putShort(tail, 12, pad2)
+            putShort(tail, 14 + pad2, 68)
+            enc.crypt(tail, 0, tail.size)
+            output.write(syncHash)
+            output.write(obfsc)
+            output.write(tail)
+
+            val handshake = buildHandshake(infohash, peerId)
+            enc.crypt(handshake, 0, handshake.size)
+            output.write(handshake)
+            output.flush()
+
+            val searchDec = dec.copy()
+            val vcKey = ByteArray(8)
+            searchDec.crypt(vcKey, 0, 8)
+            val buf = ByteArray(2048)
+            var total = 0
+            var vcPos = -1
+            while (true) {
+                val n = input.read(buf, total, buf.size - total)
+                if (n < 0) return null
+                total += n
+                vcPos = indexOfSeq(buf, total, vcKey)
+                if (vcPos >= 0) break
+                if (total >= buf.size) return null
+            }
+            val tail2 = buf.copyOfRange(vcPos, total)
+            dec.crypt(tail2, 0, tail2.size)
+            val cryptoSelect = getInt(tail2, 8)
+            val lenPad = getShort(tail2, 12)
+            if (cryptoSelect == 0) return null
+            val rc4Mode = cryptoSelect == 0x02
+            val pending = Pending()
+            val hp = 14 + lenPad
+            if (tail2.size > hp) pending.add(tail2, hp, tail2.size - hp)
+            val peerHs = readDecrypted(Session(input, output, enc, dec, pending, rc4Mode), 68) ?: return null
+            if (peerHs[0].toInt() != 19) return null
+            if (!peerHs.copyOfRange(28, 48).contentEquals(infohash)) return null
+
+            metadataExchange(Session(input, output, enc, dec, pending, rc4Mode), infohash, peerId)
+        } finally {
+            try {
+                socket?.close()
+            } catch (ignored: Exception) {
+            }
+        }
+    }
+
+    private fun metadataExchange(sess: Session, infohash: ByteArray, peerId: ByteArray): ByteArray? {
+        sendMessage(sess, 20, byteArrayOf(0) + "d1:md11:ut_metadatai1eee".toByteArray(Charsets.US_ASCII))
+        var metadataSize = -1
+        var utMetadata = -1
+        var got = false
+        var requested = false
+        val pieces = mutableMapOf<Int, ByteArray>()
+        val deadline = System.currentTimeMillis() + 60000
+        while (System.currentTimeMillis() < deadline) {
+            if (got && !requested) {
+                requested = true
+                val total = (metadataSize + PIECE_SIZE - 1) / PIECE_SIZE
+                for (pi in 0 until total) sendMetadataRequest(sess, utMetadata, pi)
+            }
+            val msg = readMessage(sess) ?: break
+            if (msg.isEmpty()) continue
+            val id = msg[0].toInt() and 0xff
+            if (id == 20) {
+                if (msg.size < 2) continue
+                val extId = msg[1].toInt() and 0xff
+                val payload = msg.copyOfRange(2, msg.size)
+                if (extId == 0) {
+                    metadataSize = findBencInt(payload, "metadata_size") ?: -1
+                    utMetadata = findBencInt(payload, "ut_metadata") ?: -1
+                    if (metadataSize > 0 && utMetadata > 0) got = true
+                } else if (extId == utMetadata || extId == 1) {
+                    val pr = parseMetadataPiece(payload)
+                    if (pr != null && pr.second.isNotEmpty()) {
+                        val (piece, data) = pr
+                        if (!pieces.containsKey(piece)) {
+                            pieces[piece] = data
+                            if (pieces.size >= (metadataSize + PIECE_SIZE - 1) / PIECE_SIZE) break
+                        }
+                    }
+                }
+            }
+        }
+        if (pieces.isEmpty()) return null
+        val info = assemble(metadataSize, pieces) ?: return null
+        if (!isValidInfo(info)) return null
+        return info
     }
 
     private fun assemble(metadataSize: Int, pieces: Map<Int, ByteArray>): ByteArray? {
@@ -150,50 +239,84 @@ object JavaPeerClient {
         return out
     }
 
-    private fun sendHandshake(output: OutputStream, infohash: ByteArray, peerId: ByteArray) {
+    private class Pending {
+        private var buf = ByteArray(16384)
+        private var start = 0
+        private var len = 0
+
+        fun available(): Int = len
+
+        fun add(d: ByteArray, o: Int, n: Int) {
+            if (len + n > buf.size) {
+                val nb = ByteArray(maxOf(buf.size * 2, len + n))
+                System.arraycopy(buf, start, nb, 0, len)
+                buf = nb
+                start = 0
+            }
+            if (start + len + n > buf.size) {
+                System.arraycopy(buf, start, buf, 0, len)
+                start = 0
+            }
+            System.arraycopy(d, o, buf, start + len, n)
+            len += n
+        }
+
+        fun take(n: Int): ByteArray {
+            val r = ByteArray(n)
+            System.arraycopy(buf, start, r, 0, n)
+            start += n
+            len -= n
+            if (len == 0) start = 0
+            return r
+        }
+    }
+
+    private fun readDecrypted(sess: Session, n: Int): ByteArray? {
+        while (sess.pending.available() < n) {
+            val raw = ByteArray(4096)
+            val r = sess.input.read(raw)
+            if (r < 0) return null
+            if (sess.encrypted) sess.dec?.crypt(raw, 0, r)
+            sess.pending.add(raw, 0, r)
+        }
+        return sess.pending.take(n)
+    }
+
+    private fun readMessage(sess: Session): ByteArray? {
+        val lb = readDecrypted(sess, 4) ?: return null
+        val len = getInt(lb, 0)
+        if (len == 0) return ByteArray(0)
+        if (len > 1024 * 1024) return null
+        return readDecrypted(sess, len)
+    }
+
+    private fun sendMessage(sess: Session, id: Int, payload: ByteArray) {
+        val len = payload.size + 1
+        val hdr = byteArrayOf((len ushr 24).toByte(), (len ushr 16).toByte(), (len ushr 8).toByte(), len.toByte(), id.toByte())
+        if (sess.encrypted) {
+            sess.enc?.crypt(hdr, 0, hdr.size)
+            sess.enc?.crypt(payload, 0, payload.size)
+        }
+        sess.output.write(hdr)
+        sess.output.write(payload)
+        sess.output.flush()
+    }
+
+    private fun buildHandshake(infohash: ByteArray, peerId: ByteArray): ByteArray {
         val b = ByteArray(68)
         b[0] = 19
         val proto = "BitTorrent protocol".toByteArray(Charsets.US_ASCII)
         System.arraycopy(proto, 0, b, 1, proto.size)
         b[25] = 0x10.toByte()
+        b[27] = 0x05.toByte()
         System.arraycopy(infohash, 0, b, 28, 20)
         System.arraycopy(peerId, 0, b, 48, 20)
-        output.write(b)
-        output.flush()
+        return b
     }
 
-    private fun sendExtHandshake(output: OutputStream) {
-        val payload = "d1:md11:ut_metadatai1eee".toByteArray(Charsets.US_ASCII)
-        sendMessage(output, 20, byteArrayOf(0) + payload)
-    }
-
-    private fun sendInterested(output: OutputStream) {
-        sendMessage(output, 2, ByteArray(0))
-    }
-
-    private fun sendMetadataRequest(output: OutputStream, utMetadata: Int, piece: Int) {
+    private fun sendMetadataRequest(sess: Session, utMetadata: Int, piece: Int) {
         val payload = "d8:msg_typei0e5:piecei${piece}ee".toByteArray(Charsets.US_ASCII)
-        sendMessage(output, 20, byteArrayOf(utMetadata.toByte()) + payload)
-    }
-
-    private fun sendMessage(output: OutputStream, id: Int, payload: ByteArray) {
-        val len = payload.size + 1
-        output.write(byteArrayOf((len ushr 24).toByte(), (len ushr 16).toByte(), (len ushr 8).toByte(), len.toByte()))
-        output.write(id)
-        output.write(payload)
-        output.flush()
-    }
-
-    private fun readMessage(input: InputStream): ByteArray? {
-        val lenBuf = ByteArray(4)
-        readExact(input, lenBuf, 0, 4)
-        val len = ((lenBuf[0].toInt() and 0xff) shl 24) or ((lenBuf[1].toInt() and 0xff) shl 16) or
-            ((lenBuf[2].toInt() and 0xff) shl 8) or (lenBuf[3].toInt() and 0xff)
-        if (len == 0) return ByteArray(0)
-        if (len > 1024 * 1024) return null
-        val msg = ByteArray(len)
-        readExact(input, msg, 0, len)
-        return msg
+        sendMessage(sess, 20, byteArrayOf(utMetadata.toByte()) + payload)
     }
 
     private fun readExact(input: InputStream, buf: ByteArray, off: Int, n: Int) {
@@ -227,47 +350,206 @@ object JavaPeerClient {
         return null
     }
 
+    private fun skipBencString(d: ByteArray, p0: Int): Pair<Int, Int>? {
+        var p = p0
+        var len = 0
+        while (p < d.size && d[p] in '0'.code.toByte()..'9'.code.toByte()) {
+            len = len * 10 + (d[p] - '0'.code.toByte())
+            p++
+        }
+        if (p >= d.size || d[p] != ':'.code.toByte()) return null
+        p++
+        if (p + len > d.size) return null
+        return len to (p + len)
+    }
+
+    private fun skipValue(d: ByteArray, p0: Int): Int? {
+        if (p0 >= d.size) return null
+        val c = d[p0].toInt().toChar()
+        return when {
+            c == 'i' -> {
+                var p = p0 + 1
+                while (p < d.size && d[p] != 'e'.code.toByte()) p++
+                if (p >= d.size) null else p + 1
+            }
+            c == 'l' -> {
+                var p = p0 + 1
+                while (p < d.size && d[p] != 'e'.code.toByte()) {
+                    p = skipValue(d, p) ?: return null
+                }
+                if (p >= d.size) null else p + 1
+            }
+            c == 'd' -> {
+                var p = p0 + 1
+                while (p < d.size && d[p] != 'e'.code.toByte()) {
+                    val k = skipBencString(d, p) ?: return null
+                    p = k.second
+                    p = skipValue(d, p) ?: return null
+                }
+                if (p >= d.size) null else p + 1
+            }
+            else -> skipBencString(d, p0)?.second
+        }
+    }
+
     private fun parseMetadataPiece(payload: ByteArray): Pair<Int, ByteArray>? {
+        val keyPiece = "piece".toByteArray(Charsets.US_ASCII)
         return try {
             var p = 0
             if (payload.size < 2 || payload[p] != 'd'.code.toByte()) return null
             p++
-            fun skipBencString(): Int {
-                var len = 0
-                while (p < payload.size && payload[p] in '0'.code.toByte()..'9'.code.toByte()) {
-                    len = len * 10 + (payload[p] - '0'.code.toByte())
-                    p++
-                }
-                if (p >= payload.size || payload[p] != ':'.code.toByte()) return -1
-                p++
-                return p + len
-            }
-            var q = skipBencString()
-            if (q < 0) return null
-            p = q
-            if (p >= payload.size || payload[p] != 'i'.code.toByte()) return null
-            p++
-            while (p < payload.size && payload[p] != 'e'.code.toByte()) p++
-            p++
-            q = skipBencString()
-            if (q < 0) return null
-            p = q
-            if (p >= payload.size || payload[p] != 'i'.code.toByte()) return null
-            p++
-            var piece = 0
+            var piece = -1
             while (p < payload.size && payload[p] != 'e'.code.toByte()) {
-                piece = piece * 10 + (payload[p] - '0'.code.toByte())
-                p++
+                val k = skipBencString(payload, p) ?: return null
+                val keyStart = k.second - k.first
+                p = k.second
+                if (p >= payload.size) return null
+                val isPiece = k.first == keyPiece.size && rangeEquals(payload, keyStart, keyPiece)
+                if (isPiece && payload[p] == 'i'.code.toByte()) {
+                    p++
+                    var v = 0
+                    while (p < payload.size && payload[p] != 'e'.code.toByte()) {
+                        v = v * 10 + (payload[p] - '0'.code.toByte())
+                        p++
+                    }
+                    if (p >= payload.size) return null
+                    p++
+                    piece = v
+                } else {
+                    p = skipValue(payload, p) ?: return null
+                }
             }
             if (p >= payload.size) return null
             p++
-            if (p >= payload.size || payload[p] != 'e'.code.toByte()) return null
-            p++
+            if (piece < 0) return null
             piece to payload.copyOfRange(p, payload.size)
         } catch (e: Exception) {
             null
         }
     }
+
+    private fun rangeEquals(d: ByteArray, off: Int, needle: ByteArray): Boolean {
+        for (i in needle.indices) {
+            if (d[off + i] != needle[i]) return false
+        }
+        return true
+    }
+
+    private class RC4(private val key: ByteArray) {
+        private val s = IntArray(256)
+        private var x = 0
+        private var y = 0
+
+        init {
+            for (i in 0..255) s[i] = i
+            var j = 0
+            for (i in 0..255) {
+                j = (j + s[i] + (key[i % key.size].toInt() and 0xff)) and 0xff
+                val t = s[i]
+                s[i] = s[j]
+                s[j] = t
+            }
+        }
+
+        fun copy(): RC4 {
+            val c = RC4(ByteArray(1))
+            System.arraycopy(s, 0, c.s, 0, 256)
+            c.x = x
+            c.y = y
+            return c
+        }
+
+        fun crypt(d: ByteArray, off: Int, len: Int) {
+            for (n in 0 until len) {
+                x = (x + 1) and 0xff
+                y = (y + s[x]) and 0xff
+                val t = s[x]
+                s[x] = s[y]
+                s[y] = t
+                d[off + n] = (d[off + n].toInt() xor s[(s[x] + s[y]) and 0xff]).toByte()
+            }
+        }
+
+        fun discard(n: Int) {
+            val t = ByteArray(n)
+            crypt(t, 0, n)
+        }
+    }
+
+    private fun sha1(vararg parts: ByteArray): ByteArray {
+        val md = java.security.MessageDigest.getInstance("SHA-1")
+        for (p in parts) md.update(p)
+        return md.digest()
+    }
+
+    private fun concat(a: ByteArray, b: ByteArray): ByteArray {
+        val r = ByteArray(a.size + b.size)
+        System.arraycopy(a, 0, r, 0, a.size)
+        System.arraycopy(b, 0, r, a.size, b.size)
+        return r
+    }
+
+    private fun concat3(a: ByteArray, b: ByteArray, c: ByteArray): ByteArray {
+        val r = ByteArray(a.size + b.size + c.size)
+        System.arraycopy(a, 0, r, 0, a.size)
+        System.arraycopy(b, 0, r, a.size, b.size)
+        System.arraycopy(c, 0, r, a.size + b.size, c.size)
+        return r
+    }
+
+    private fun xor(a: ByteArray, b: ByteArray): ByteArray {
+        val r = ByteArray(a.size)
+        for (i in a.indices) r[i] = (a[i].toInt() xor b[i].toInt()).toByte()
+        return r
+    }
+
+    private fun export96(k: BigInteger): ByteArray {
+        var b = k.toByteArray()
+        if (b.size > 1 && b[0].toInt() == 0) b = b.copyOfRange(1, b.size)
+        val r = ByteArray(96)
+        if (b.size <= 96) System.arraycopy(b, 0, r, 96 - b.size, b.size)
+        else System.arraycopy(b, b.size - 96, r, 0, 96)
+        return r
+    }
+
+    private fun putInt(b: ByteArray, off: Int, v: Int) {
+        b[off] = (v ushr 24).toByte()
+        b[off + 1] = (v ushr 16).toByte()
+        b[off + 2] = (v ushr 8).toByte()
+        b[off + 3] = v.toByte()
+    }
+
+    private fun putShort(b: ByteArray, off: Int, v: Int) {
+        b[off] = (v ushr 8).toByte()
+        b[off + 1] = v.toByte()
+    }
+
+    private fun getInt(b: ByteArray, off: Int): Int {
+        return ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or
+            ((b[off + 2].toInt() and 0xff) shl 8) or (b[off + 3].toInt() and 0xff)
+    }
+
+    private fun getShort(b: ByteArray, off: Int): Int {
+        return ((b[off].toInt() and 0xff) shl 8) or (b[off + 1].toInt() and 0xff)
+    }
+
+    private fun indexOfSeq(buf: ByteArray, len: Int, needle: ByteArray): Int {
+        outer@ for (i in 0..len - needle.size) {
+            for (j in needle.indices) {
+                if (buf[i + j] != needle[j]) continue@outer
+            }
+            return i
+        }
+        return -1
+    }
+
+    private fun randBytes(rnd: java.security.SecureRandom, n: Int): ByteArray {
+        val b = ByteArray(n)
+        rnd.nextBytes(b)
+        return b
+    }
+
+    private val DH_PRIME_HEX = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A63A36210000000000090563"
 
     private fun isValidInfo(info: ByteArray): Boolean {
         return try {
