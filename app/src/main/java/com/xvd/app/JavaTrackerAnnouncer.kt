@@ -59,10 +59,19 @@ object JavaTrackerAnnouncer {
                 val port = TorrentEngine.nativeListenPort
                 var injected = 0
                 for (url in trackerList()) {
-                    val r = if (url.startsWith("udp://")) {
-                        udpAnnounceOnce(url, infohash, pid, port)
-                    } else {
-                        announceOnce(url, infohash, pid, port)
+                    var r: List<Pair<String, Int>>? = null
+                    if (url.startsWith("udp://")) {
+                        r = udpAnnounceOnce(url, infohash, pid, port)
+                    } else if (url.contains("://")) {
+                        val u = java.net.URI(url)
+                        val ip = resolveDoh(u.host)
+                        if (ip != null && ip != u.host) {
+                            val tag = compactUrl(url)
+                            r = announceOnceAtIp(url, ip, infohash, pid, port)
+                            if (r != null) TorrentEngine.recordJavaAnnounce("java上报 $tag @$ip: 返回${r.size}个")
+                        } else {
+                            r = announceOnce(url, infohash, pid, port)
+                        }
                     }
                     when {
                         r == null -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 网络失败")
@@ -74,6 +83,11 @@ object JavaTrackerAnnouncer {
                         }
                     }
                 }
+                val st2 = try { h.status() } catch (e: Exception) { null }
+                val pi = try { h.peerInfo() } catch (e: Exception) { null }
+                val lp = if (st2 != null) "发现${st2.listPeers()} 连接${st2.numPeers()}" else "状态读取失败"
+                val pc = pi?.size ?: -1
+                TorrentEngine.recordJavaAnnounce("注入后: $lp Peers列表=$pc")
                 if (injected == 0) TorrentEngine.recordJavaAnnounce("java上报: 本轮未注入peer")
                 TorrentEngine.recordJavaAnnounce("java上报: 累计注入${injected}个")
             } catch (ignored: Exception) {
@@ -190,6 +204,56 @@ object JavaTrackerAnnouncer {
         return -1
     }
 
+    private fun resolveDoh(host: String): String? {
+        return try {
+            val conn = URL("https://dns.google/resolve?name=$host&type=A").openConnection() as HttpURLConnection
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.instanceFollowRedirects = true
+            val body = if (conn.responseCode == 200) conn.inputStream.use { it.readBytes() }.toString(Charsets.UTF_8) else null
+            conn.disconnect()
+            if (body == null) return null
+            val m = Regex("\"data\"\\s*:\\s*\"(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\"").find(body)
+            m?.groupValues?.get(1)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun announceOnceAtIp(
+        url: String,
+        ip: String,
+        infohash: ByteArray,
+        pid: ByteArray,
+        port: Int
+    ): List<Pair<String, Int>>? {
+        var conn: HttpURLConnection? = null
+        return try {
+            val u = java.net.URI(url)
+            var p = u.port
+            if (p == -1) p = if (u.scheme == "https") 443 else 80
+            val path = if (u.path.isNullOrEmpty()) "/announce" else u.path
+            val query = "info_hash=${encodeBytes(infohash)}&peer_id=${encodeBytes(pid)}&port=$port&uploaded=0&downloaded=0&left=1073741824&compact=1&event=started"
+            val target = "${u.scheme}://$ip:$p$path?$query"
+            conn = URL(target).openConnection() as HttpURLConnection
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty("Host", u.host + if (u.port != -1) ":${u.port}" else "")
+            val code = conn.responseCode
+            if (code != 200) return null
+            val body = conn.inputStream.use { it.readBytes() }
+            parseCompactPeers(body)
+        } catch (e: Exception) {
+            null
+        } finally {
+            try {
+                conn?.disconnect()
+            } catch (ignored: Exception) {
+            }
+        }
+    }
+
     private fun udpAnnounceOnce(url: String, infohash: ByteArray, pid: ByteArray, port: Int): List<Pair<String, Int>>? {
         return try {
             val u = java.net.URI(url)
@@ -284,7 +348,8 @@ object JavaTrackerAnnouncer {
                     h.swig().connect_peer(tcp_endpoint(addr, p))
                     n++
                 }
-            } catch (ignored: Exception) {
+            } catch (e: Exception) {
+                TorrentEngine.recordJavaAnnounce("connect_peer异常 $ip:$p: ${e.message}")
             }
         }
         return n
