@@ -259,18 +259,28 @@ object TorrentManager {
             callback(sb.toString())
         }.start()
     }
-
-    fun testConnectivity(callback: (String) -> Unit) {        Thread {
+    fun testConnectivity(callback: (String) -> Unit) {
+        Thread {
             val sb = StringBuilder()
-            val targets = listOf(
+            sb.append("--- TCP 测试 ---\n")
+            for ((host, port) in listOf(
                 "github.com" to 443,
                 "tracker.dler.org" to 443,
                 "tracker.opentrackr.org" to 443,
                 "p4p.arenabg.com" to 1337
-            )
-            for ((host, port) in targets) {
+            )) {
                 sb.append("$host:$port → ").append(
                     if (tcpReachable(host, port)) "可达" else "超时/不可达"
+                ).append("\n")
+            }
+            sb.append("--- UDP 测试 (BT Tracker/引导) ---\n")
+            for ((host, port) in listOf(
+                "router.bittorrent.com" to 6881,
+                "tracker.opentrackr.org" to 1337,
+                "tracker.dler.org" to 6969
+            )) {
+                sb.append("$host:$port → ").append(
+                    if (udpReachable(host, port)) "可达" else "超时/不可达"
                 ).append("\n")
             }
             callback(sb.toString())
@@ -282,6 +292,27 @@ object TorrentManager {
             val s = java.net.Socket()
             s.connect(java.net.InetSocketAddress(host, port), timeoutMs)
             s.close()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun udpReachable(host: String, port: Int, timeoutMs: Int = 3000): Boolean {
+        return try {
+            val sock = java.net.DatagramSocket()
+            sock.soTimeout = timeoutMs
+            val tx = java.util.Random().nextInt()
+            val pkt = java.nio.ByteBuffer.allocate(16).apply {
+                order(java.nio.ByteOrder.BIG_ENDIAN)
+                putLong(0x41727101980L)
+                putInt(0)
+                putInt(tx)
+            }
+            sock.send(java.net.DatagramPacket(pkt.array(), 16, java.net.InetAddress.getByName(host), port))
+            val buf = ByteArray(64)
+            sock.receive(java.net.DatagramPacket(buf, buf.size))
+            sock.close()
             true
         } catch (e: Exception) {
             false

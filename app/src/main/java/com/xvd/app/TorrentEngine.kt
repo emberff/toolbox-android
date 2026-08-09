@@ -76,6 +76,8 @@ object TorrentEngine {
         sm.startDht()
         val settings = SettingsPack().apply {
             setString(settings_pack.string_types.listen_interfaces.swigValue(), "0.0.0.0:0")
+            setBoolean(settings_pack.bool_types.prefer_udp_trackers.swigValue(), false)
+            setBoolean(settings_pack.bool_types.announce_to_all_trackers.swigValue(), true)
         }
         TorrentSettings.applyTo(settings)
         try {
