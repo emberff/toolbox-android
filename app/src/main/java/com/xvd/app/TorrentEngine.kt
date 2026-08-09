@@ -45,8 +45,13 @@ object TorrentEngine {
 
     private val _engineErrors = ArrayDeque<String>()
 
+    private val _javaAnnounceLog = ArrayDeque<String>()
+
     val engineErrors: List<String>
         get() = synchronized(_engineErrors) { _engineErrors.toList() }
+
+    val javaAnnounceLog: List<String>
+        get() = synchronized(_javaAnnounceLog) { _javaAnnounceLog.toList() }
 
     val lastEngineError: String
         get() = engineErrors.lastOrNull() ?: "无"
@@ -60,6 +65,13 @@ object TorrentEngine {
     }
 
     fun recordEngineInfo(msg: String) = recordError(msg)
+
+    fun recordJavaAnnounce(msg: String) {
+        synchronized(_javaAnnounceLog) {
+            _javaAnnounceLog.addLast(msg)
+            while (_javaAnnounceLog.size > 16) _javaAnnounceLog.removeFirst()
+        }
+    }
 
     @Volatile
     private var lastRebindAttempt = 0L
@@ -254,6 +266,7 @@ object TorrentEngine {
             AlertType.TRACKER_REPLY.swig(),
             AlertType.TRACKER_WARNING.swig(),
             AlertType.PEER_ERROR.swig(),
+            AlertType.PEER_CONNECT.swig(),
             AlertType.DHT_ERROR.swig(),
             AlertType.DHT_BOOTSTRAP.swig(),
             AlertType.TORRENT_ERROR.swig(),
@@ -276,6 +289,8 @@ object TorrentEngine {
                         recordError("Tracker警告: ${alert.message()}")
                     is com.frostwire.jlibtorrent.alerts.PeerErrorAlert ->
                         recordError("peer连接失败 ${alert.endpoint()}: ${alert.error().message()}")
+                    is com.frostwire.jlibtorrent.alerts.PeerConnectAlert ->
+                        recordError("peer已连接 ${alert.endpoint()}")
                     is com.frostwire.jlibtorrent.alerts.DhtErrorAlert ->
                         recordError("DHT错误: ${alert.message()}")
                     else -> {}

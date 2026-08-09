@@ -12,9 +12,11 @@ object JavaTrackerAnnouncer {
 
     private const val HTTP_TRACKERS = "http://tracker.dler.org:80/announce,http://tracker.openbittorrent.com:80/announce,https://tracker.dler.org:443/announce,https://tracker.opentrackr.org:443/announce,https://tracker.bittor.pw:443/announce"
 
+    private const val UDP_TRACKERS = "udp://tracker.dler.org:6969,udp://tracker.opentrackr.org:1337,udp://open.demonii.com:1337,udp://tracker.openbittorrent.com:6969,udp://exodus.desync.com:6969,udp://explodie.org:6969"
+
     private val announcing = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    private fun trackerList(): List<String> = HTTP_TRACKERS.split(",")
+    private fun trackerList(): List<String> = HTTP_TRACKERS.split(",") + UDP_TRACKERS.split(",")
 
     private var peerId: ByteArray? = null
 
@@ -57,18 +59,23 @@ object JavaTrackerAnnouncer {
                 val port = TorrentEngine.nativeListenPort
                 var injected = 0
                 for (url in trackerList()) {
-                    val r = announceOnce(url, infohash, pid, port)
+                    val r = if (url.startsWith("udp://")) {
+                        udpAnnounceOnce(url, infohash, pid, port)
+                    } else {
+                        announceOnce(url, infohash, pid, port)
+                    }
                     when {
-                        r == null -> TorrentEngine.recordEngineInfo("java上报 ${compactUrl(url)}: 网络失败")
-                        r.isEmpty() -> TorrentEngine.recordEngineInfo("java上报 ${compactUrl(url)}: 返回0个peer")
+                        r == null -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 网络失败")
+                        r.isEmpty() -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回0个peer")
                         else -> {
                             val n = injectPeers(h, r)
                             injected += n
-                            TorrentEngine.recordEngineInfo("java上报 ${compactUrl(url)}: 返回${r.size}个 注入$n")
+                            TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回${r.size}个 注入$n")
                         }
                     }
                 }
-                if (injected == 0) TorrentEngine.recordEngineInfo("java上报: 本轮未注入peer")
+                if (injected == 0) TorrentEngine.recordJavaAnnounce("java上报: 本轮未注入peer")
+                TorrentEngine.recordJavaAnnounce("java上报: 累计注入${injected}个")
             } catch (ignored: Exception) {
             } finally {
                 announcing.remove(key)
@@ -81,7 +88,11 @@ object JavaTrackerAnnouncer {
         val fake = hexToBytes("0000000000000000000000000000000000000000")
         val port = TorrentEngine.nativeListenPort
         return trackerList().map { url ->
-            val r = announceOnce(url, fake, pid, port)
+            val r = if (url.startsWith("udp://")) {
+                udpAnnounceOnce(url, fake, pid, port)
+            } else {
+                announceOnce(url, fake, pid, port)
+            }
             val result = when {
                 r == null -> "失败(超时/网络)"
                 r.isEmpty() -> "200 返回0个peer"
@@ -95,8 +106,13 @@ object JavaTrackerAnnouncer {
         return try {
             val u = java.net.URI(url)
             var port = u.port
-            if (port == -1) port = if (u.scheme == "https") 443 else 80
-            "${u.host}:$port[${if (u.scheme == "https") "s" else "h"}]"
+            if (port == -1) port = if (u.scheme == "https") 443 else if (u.scheme == "udp") 6969 else 80
+            val tag = when (u.scheme) {
+                "https" -> "s"
+                "udp" -> "u"
+                else -> "h"
+            }
+            "${u.host}:$port[$tag]"
         } catch (e: Exception) {
             url
         }
@@ -172,6 +188,89 @@ object JavaTrackerAnnouncer {
             return i
         }
         return -1
+    }
+
+    private fun udpAnnounceOnce(url: String, infohash: ByteArray, pid: ByteArray, port: Int): List<Pair<String, Int>>? {
+        return try {
+            val u = java.net.URI(url)
+            val host = u.host
+            val rport = if (u.port == -1) 6969 else u.port
+            val sock = java.net.DatagramSocket()
+            try {
+                sock.soTimeout = 5000
+                val addr = java.net.InetAddress.getByName(host)
+                val rnd = java.util.Random()
+                val txConnect = rnd.nextInt(Int.MAX_VALUE)
+                val connReq = ByteArray(16)
+                connReq[0] = 0
+                connReq[1] = 0
+                connReq[2] = 0
+                connReq[3] = 4
+                connReq[4] = 0x17.toByte()
+                connReq[5] = 0x27.toByte()
+                connReq[6] = 0x10.toByte()
+                connReq[7] = 0x80.toByte()
+                writeIntBE(connReq, 8, 0)
+                writeIntBE(connReq, 12, txConnect)
+                sock.send(java.net.DatagramPacket(connReq, connReq.size, addr, rport))
+                val respBuf = ByteArray(2048)
+                var packet = java.net.DatagramPacket(respBuf, respBuf.size)
+                sock.receive(packet)
+                if (packet.length < 16 || readIntBE(respBuf, 0) != 0 || readIntBE(respBuf, 4) != txConnect) return null
+                val connectionId = ByteArray(8)
+                System.arraycopy(respBuf, 8, connectionId, 0, 8)
+                val txAnnounce = rnd.nextInt(Int.MAX_VALUE)
+                val req = ByteArray(98)
+                System.arraycopy(connectionId, 0, req, 0, 8)
+                writeIntBE(req, 8, 1)
+                writeIntBE(req, 12, txAnnounce)
+                System.arraycopy(infohash, 0, req, 16, 20)
+                System.arraycopy(pid, 0, req, 36, 20)
+                writeLongBE(req, 56, 0L)
+                writeLongBE(req, 64, 1073741824L)
+                writeLongBE(req, 72, 0L)
+                writeIntBE(req, 80, 2)
+                writeIntBE(req, 84, 0)
+                writeIntBE(req, 88, rnd.nextInt())
+                writeIntBE(req, 92, -1)
+                req[96] = ((port shr 8) and 0xff).toByte()
+                req[97] = (port and 0xff).toByte()
+                sock.send(java.net.DatagramPacket(req, req.size, addr, rport))
+                packet = java.net.DatagramPacket(respBuf, respBuf.size)
+                sock.receive(packet)
+                if (packet.length < 20 || readIntBE(respBuf, 0) != 1 || readIntBE(respBuf, 4) != txAnnounce) return null
+                val list = mutableListOf<Pair<String, Int>>()
+                var k = 20
+                while (k + 6 <= packet.length) {
+                    val ip = "${respBuf[k].toInt() and 0xff}.${respBuf[k + 1].toInt() and 0xff}.${respBuf[k + 2].toInt() and 0xff}.${respBuf[k + 3].toInt() and 0xff}"
+                    val p = ((respBuf[k + 4].toInt() and 0xff) shl 8) or (respBuf[k + 5].toInt() and 0xff)
+                    list.add(ip to p)
+                    k += 6
+                }
+                list
+            } finally {
+                sock.close()
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun writeIntBE(b: ByteArray, off: Int, v: Int) {
+        b[off] = (v ushr 24).toByte()
+        b[off + 1] = (v ushr 16).toByte()
+        b[off + 2] = (v ushr 8).toByte()
+        b[off + 3] = v.toByte()
+    }
+
+    private fun writeLongBE(b: ByteArray, off: Int, v: Long) {
+        writeIntBE(b, off, (v ushr 32).toInt())
+        writeIntBE(b, off + 4, v.toInt())
+    }
+
+    private fun readIntBE(b: ByteArray, off: Int): Int {
+        return ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or
+            ((b[off + 2].toInt() and 0xff) shl 8) or (b[off + 3].toInt() and 0xff)
     }
 
     private fun injectPeers(h: TorrentHandle, peers: List<Pair<String, Int>>): Int {

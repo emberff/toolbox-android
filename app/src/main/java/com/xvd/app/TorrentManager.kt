@@ -272,6 +272,11 @@ object TorrentManager {
                 sb.append("最近错误(${errs.size}):\n")
                 for (e in errs) sb.append("  · $e\n")
             }
+            val jl = TorrentEngine.javaAnnounceLog
+            if (jl.isNotEmpty()) {
+                sb.append("java上报记录(${jl.size}):\n")
+                for (e in jl) sb.append("  · $e\n")
+            }
             sb.append("任务数: ${snapshot().size}\n")
             for (item in snapshot()) {
                 TorrentEngine.forceReannounce(item.infoHash)
@@ -291,18 +296,22 @@ object TorrentManager {
                     val working = trackers.count { it.isVerified() }
                     sb.append("  状态: ${item.state} · 发现${st.listPeers()} 连接${st.numPeers()} 种子${st.numSeeds()}\n")
                     sb.append("  Tracker: 共${trackers.size}个, 成功上报${working}个\n")
-                    val pis = h.peerInfo()
-                    if (pis.isNotEmpty()) {
+                    try {
+                        val pis = h.peerInfo()
                         sb.append("  Peers(${pis.size}):\n")
-                        for (pi in pis.take(6)) {
-                            val ft = when {
-                                pi.connectionType().name.contains("CONNECTING") -> "连接中"
-                                pi.connectionType().name.contains("CONNECTED") -> "已连接"
-                                pi.connectionType().name.contains("HANDSHAKE") -> "握手"
-                                else -> pi.connectionType().name
+                        if (pis.isNotEmpty()) {
+                            for (pi in pis.take(6)) {
+                                val ft = when {
+                                    pi.connectionType().name.contains("CONNECTING") -> "连接中"
+                                    pi.connectionType().name.contains("CONNECTED") -> "已连接"
+                                    pi.connectionType().name.contains("HANDSHAKE") -> "握手"
+                                    else -> pi.connectionType().name
+                                }
+                                sb.append("    ${pi.ip()} $ft 下载${pi.downSpeed()}/s 进度${pi.progressPpm()}\n")
                             }
-                            sb.append("    ${pi.ip()} $ft 下载${pi.downSpeed()}/s 进度${pi.progressPpm()}\n")
                         }
+                    } catch (e: Exception) {
+                        sb.append("  (peer读取失败: ${e.message})\n")
                     }
                     for (t in trackers) {
                         try {
