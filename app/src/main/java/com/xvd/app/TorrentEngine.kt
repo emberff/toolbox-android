@@ -4,7 +4,6 @@ import com.frostwire.jlibtorrent.AddTorrentParams
 import com.frostwire.jlibtorrent.AlertListener
 import com.frostwire.jlibtorrent.Priority
 import com.frostwire.jlibtorrent.SessionManager
-import com.frostwire.jlibtorrent.SessionParams
 import com.frostwire.jlibtorrent.SettingsPack
 import com.frostwire.jlibtorrent.Sha1Hash
 import com.frostwire.jlibtorrent.TorrentHandle
@@ -30,8 +29,23 @@ object TorrentEngine {
     val listenPorts: String
         get() = session?.listenEndpoints()?.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "-"
 
+    val nativeListenPort: Int
+        get() = try {
+            session?.swig()?.listen_port() ?: 0
+        } catch (e: Exception) {
+            0
+        }
+
+    @Volatile
+    var lastEngineError: String = "无"
+        private set
+
     fun start() {
         if (isRunning) return
+        val sm = SessionManager()
+        sm.addListener(listener)
+        sm.start()
+        sm.startDht()
         val settings = SettingsPack().apply {
             enableDht(true)
             setBoolean(settings_pack.bool_types.enable_upnp.swigValue(), true)
@@ -44,22 +58,17 @@ object TorrentEngine {
             setBoolean(settings_pack.bool_types.enable_incoming_tcp.swigValue(), true)
             setBoolean(settings_pack.bool_types.enable_outgoing_utp.swigValue(), true)
             setBoolean(settings_pack.bool_types.enable_incoming_utp.swigValue(), true)
-            setString(settings_pack.string_types.listen_interfaces.swigValue(), "0.0.0.0:0")
+            setString(settings_pack.string_types.listen_interfaces.swigValue(), "0.0.0.0:0,[::]:0")
             setString(
                 settings_pack.string_types.dht_bootstrap_nodes.swigValue(),
                 DHT_BOOTSTRAP_NODES.joinToString(",") { "${it.first}:${it.second}" }
             )
-            setString(settings_pack.string_types.user_agent.swigValue(), "toolbox/1.1.0 libtorrent/1.2")
+            setString(settings_pack.string_types.user_agent.swigValue(), "toolbox/1.1.5 libtorrent/1.2")
         }
         TorrentSettings.applyTo(settings)
-        val sm = SessionManager()
-        sm.addListener(listener)
-        sm.start(SessionParams(settings))
-        if (!sm.isDhtRunning()) {
-            try {
-                sm.startDht()
-            } catch (ignored: Exception) {
-            }
+        try {
+            sm.applySettings(settings)
+        } catch (ignored: Exception) {
         }
         addDhtBootstrapNodes(sm)
         session = sm
@@ -175,7 +184,15 @@ object TorrentEngine {
             AlertType.TORRENT_FINISHED.swig(),
             AlertType.TORRENT_REMOVED.swig(),
             AlertType.SAVE_RESUME_DATA.swig(),
-            AlertType.TORRENT_CHECKED.swig()
+            AlertType.TORRENT_CHECKED.swig(),
+            AlertType.LISTEN_SUCCEEDED.swig(),
+            AlertType.LISTEN_FAILED.swig(),
+            AlertType.TRACKER_ERROR.swig(),
+            AlertType.TRACKER_REPLY.swig(),
+            AlertType.DHT_ERROR.swig(),
+            AlertType.DHT_BOOTSTRAP.swig(),
+            AlertType.TORRENT_ERROR.swig(),
+            AlertType.SESSION_ERROR.swig()
         )
 
         override fun alert(alert: Alert<*>) {
@@ -186,6 +203,12 @@ object TorrentEngine {
                     is TorrentFinishedAlert -> TorrentManager.onTorrentFinished(alert.handle())
                     is TorrentRemovedAlert -> TorrentManager.onTorrentRemoved(alert.handle())
                     is SaveResumeDataAlert -> TorrentManager.onSaveResumeData(alert)
+                    is com.frostwire.jlibtorrent.alerts.ListenFailedAlert ->
+                        lastEngineError = "监听失败: ${alert.error().message()} (${alert.listenInterface()})"
+                    is com.frostwire.jlibtorrent.alerts.TrackerErrorAlert ->
+                        lastEngineError = "Tracker错误: ${alert.message()}"
+                    is com.frostwire.jlibtorrent.alerts.DhtErrorAlert ->
+                        lastEngineError = "DHT错误: ${alert.message()}"
                     else -> {}
                 }
             } catch (ignored: Exception) {
