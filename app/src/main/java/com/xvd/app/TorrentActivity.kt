@@ -85,6 +85,11 @@ class TorrentActivity : AppCompatActivity() {
                             .putExtra(FileSelectActivity.EXTRA_NAME, item.name)
                     )
                 }
+            },
+            onRefresh = { item ->
+                ensureService()
+                TorrentEngine.forceReannounce(item.infoHash)
+                toast("已强制刷新节点")
             }
         )
         recycler.layoutManager = LinearLayoutManager(this)

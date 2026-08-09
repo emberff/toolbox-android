@@ -90,7 +90,22 @@ object TorrentEngine {
     }
 
     fun add(params: AddTorrentParams) {
-        session?.swig()?.async_add_torrent(params.swig())
+        val s = session?.swig() ?: return
+        try {
+            val ec = com.frostwire.jlibtorrent.swig.error_code()
+            s.add_torrent(params.swig(), ec)
+        } catch (ignored: Exception) {
+        }
+    }
+
+    fun forceReannounce(hex: String) {
+        find(hex)?.let { h ->
+            try {
+                h.forceReannounce()
+                h.forceDHTAnnounce()
+            } catch (ignored: Exception) {
+            }
+        }
     }
 
     fun find(hex: String): TorrentHandle? {
