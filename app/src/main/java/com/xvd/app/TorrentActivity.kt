@@ -291,10 +291,21 @@ class TorrentActivity : AppCompatActivity() {
         TorrentManager.buildDiagnostics { result ->
             runOnUiThread {
                 tvEngine.text = "诊断完成"
+                val tv = TextView(this)
+                tv.textSize = 12f
+                tv.setTextIsSelectable(true)
+                tv.text = result
+                val maxH = (resources.displayMetrics.heightPixels * 0.6).toInt()
+                tv.setMaxHeight(maxH)
                 AlertDialog.Builder(this)
                     .setTitle("引擎诊断")
-                    .setMessage(result)
-                    .setPositiveButton("确定", null)
+                    .setView(tv)
+                    .setPositiveButton("复制全部") { _, _ ->
+                        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("diagnostics", result))
+                        android.widget.Toast.makeText(this, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("关闭", null)
                     .show()
             }
         }
