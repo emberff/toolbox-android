@@ -204,6 +204,23 @@ object TorrentManager {
         }
     }
 
+    fun adoptTorrentFile(hex: String, infoBytes: ByteArray) {
+        Thread {
+            try {
+                val torrentBytes = JavaPeerClient.buildTorrentFile(infoBytes, PUBLIC_TRACKERS)
+                remove(hex)
+                Thread.sleep(200)
+                val dir = File(appContext.filesDir, "torrents")
+                dir.mkdirs()
+                File(dir, "$hex.torrent").writeBytes(torrentBytes)
+                addTorrentFile(torrentBytes, null)
+                TorrentEngine.recordJavaAnnounce("元数据: 已切换为torrent任务")
+            } catch (e: Exception) {
+                TorrentEngine.recordJavaAnnounce("元数据: 切换任务失败 ${e.message}")
+            }
+        }.start()
+    }
+
     fun addIpTrackerVariants(hex: String) {
         Thread {
             try {
@@ -276,6 +293,11 @@ object TorrentManager {
             if (jl.isNotEmpty()) {
                 sb.append("java上报记录(${jl.size}):\n")
                 for (e in jl) sb.append("  · $e\n")
+            }
+            val dl = TorrentEngine.debugAlerts
+            if (dl.isNotEmpty()) {
+                sb.append("连接活动(${dl.size}):\n")
+                for (e in dl) sb.append("  · $e\n")
             }
             sb.append("任务数: ${snapshot().size}\n")
             for (item in snapshot()) {

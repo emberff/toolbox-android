@@ -47,11 +47,16 @@ object TorrentEngine {
 
     private val _javaAnnounceLog = ArrayDeque<String>()
 
+    private val _debugAlerts = ArrayDeque<String>()
+
     val engineErrors: List<String>
         get() = synchronized(_engineErrors) { _engineErrors.toList() }
 
     val javaAnnounceLog: List<String>
         get() = synchronized(_javaAnnounceLog) { _javaAnnounceLog.toList() }
+
+    val debugAlerts: List<String>
+        get() = synchronized(_debugAlerts) { _debugAlerts.toList() }
 
     val lastEngineError: String
         get() = engineErrors.lastOrNull() ?: "无"
@@ -70,6 +75,14 @@ object TorrentEngine {
         synchronized(_javaAnnounceLog) {
             _javaAnnounceLog.addLast(msg)
             while (_javaAnnounceLog.size > 16) _javaAnnounceLog.removeFirst()
+        }
+    }
+
+    fun recordDebug(msg: String) {
+        synchronized(_debugAlerts) {
+            if (_debugAlerts.lastOrNull() == msg) return
+            _debugAlerts.addLast(msg)
+            while (_debugAlerts.size > 40) _debugAlerts.removeFirst()
         }
     }
 
@@ -267,6 +280,12 @@ object TorrentEngine {
             AlertType.TRACKER_WARNING.swig(),
             AlertType.PEER_ERROR.swig(),
             AlertType.PEER_CONNECT.swig(),
+            AlertType.PEER_DISCONNECTED.swig(),
+            AlertType.PEER_BAN.swig(),
+            AlertType.PEER_LOG.swig(),
+            AlertType.LISTEN_SUCCEEDED.swig(),
+            AlertType.METADATA_FAILED.swig(),
+            AlertType.DHT_GET_PEERS_REPLY.swig(),
             AlertType.DHT_ERROR.swig(),
             AlertType.DHT_BOOTSTRAP.swig(),
             AlertType.TORRENT_ERROR.swig(),
@@ -291,6 +310,18 @@ object TorrentEngine {
                         recordError("peer连接失败 ${alert.endpoint()}: ${alert.error().message()}")
                     is com.frostwire.jlibtorrent.alerts.PeerConnectAlert ->
                         recordError("peer已连接 ${alert.endpoint()}")
+                    is com.frostwire.jlibtorrent.alerts.PeerDisconnectedAlert ->
+                        recordDebug("peer断开 ${alert.endpoint()} ${alert.reason()} ${alert.error().message()}")
+                    is com.frostwire.jlibtorrent.alerts.PeerLogAlert ->
+                        recordDebug("peer日志 ${alert.endpoint()} ${alert.logMessage().take(60)}")
+                    is com.frostwire.jlibtorrent.alerts.PeerBanAlert ->
+                        recordDebug("peer被禁 ${alert.endpoint()}")
+                    is com.frostwire.jlibtorrent.alerts.ListenSucceededAlert ->
+                        recordDebug("监听成功 ${alert.address()}:${alert.port()}")
+                    is com.frostwire.jlibtorrent.alerts.MetadataFailedAlert ->
+                        recordError("元数据获取失败: ${alert.getError().message()}")
+                    is com.frostwire.jlibtorrent.alerts.DhtGetPeersReplyAlert ->
+                        recordDebug("DHT返回 ${alert.infoHash().toHex().take(8)} 共${alert.numPeers()}个")
                     is com.frostwire.jlibtorrent.alerts.DhtErrorAlert ->
                         recordError("DHT错误: ${alert.message()}")
                     else -> {}

@@ -58,6 +58,7 @@ object JavaTrackerAnnouncer {
                 val pid = ensurePeerId()
                 val port = TorrentEngine.nativeListenPort
                 var injected = 0
+                val allPeers = mutableListOf<Pair<String, Int>>()
                 for (url in trackerList()) {
                     var r: List<Pair<String, Int>>? = null
                     if (url.startsWith("udp://")) {
@@ -77,6 +78,7 @@ object JavaTrackerAnnouncer {
                         r == null -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 网络失败")
                         r.isEmpty() -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回0个peer")
                         else -> {
+                            allPeers.addAll(r)
                             val n = injectPeers(h, r)
                             injected += n
                             TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回${r.size}个 注入$n")
@@ -88,6 +90,7 @@ object JavaTrackerAnnouncer {
                 val lp = if (st2 != null) "发现${st2.listPeers()} 连接${st2.numPeers()}" else "状态读取失败"
                 val pc = pi?.size ?: -1
                 TorrentEngine.recordJavaAnnounce("注入后: $lp Peers列表=$pc")
+                if (allPeers.isNotEmpty()) JavaPeerClient.attempt(hex, allPeers, pid)
                 if (injected == 0) TorrentEngine.recordJavaAnnounce("java上报: 本轮未注入peer")
                 TorrentEngine.recordJavaAnnounce("java上报: 累计注入${injected}个")
             } catch (ignored: Exception) {
