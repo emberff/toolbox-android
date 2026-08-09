@@ -58,6 +58,8 @@ object TorrentEngine {
         }
     }
 
+    fun recordEngineInfo(msg: String) = recordError(msg)
+
     @Volatile
     private var lastRebindAttempt = 0L
 

@@ -223,6 +223,7 @@ object TorrentManager {
                     }
                 }
                 if (toAdd.isNotEmpty()) TorrentEngine.forceReannounce(hex)
+                JavaTrackerAnnouncer.announce(hex)
             } catch (ignored: Exception) {
             }
         }.start()
@@ -475,6 +476,7 @@ object TorrentManager {
                         h.forceDHTAnnounce()
                     } catch (ignored: Exception) {
                     }
+                    JavaTrackerAnnouncer.announce(item.infoHash)
                 }
             } else {
                 metadataNudges.remove(item.infoHash)
