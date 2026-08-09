@@ -36,9 +36,37 @@ object TorrentEngine {
             0
         }
 
+    val listening: Boolean
+        get() = try {
+            session?.swig()?.is_listening() ?: false
+        } catch (e: Exception) {
+            false
+        }
+
     @Volatile
     var lastEngineError: String = "无"
         private set
+
+    @Volatile
+    private var lastRebindAttempt = 0L
+
+    fun ensureListening() {
+        val sm = session ?: return
+        if (!sm.isRunning()) return
+        if (listening) return
+        val now = System.currentTimeMillis()
+        if (now - lastRebindAttempt < 15000) return
+        lastRebindAttempt = now
+        try {
+            val settings = SettingsPack().apply {
+                setString(settings_pack.string_types.listen_interfaces.swigValue(), "0.0.0.0:0")
+            }
+            TorrentSettings.applyTo(settings)
+            sm.applySettings(settings)
+            lastEngineError = "检测到未监听, 已重试绑定监听端口"
+        } catch (ignored: Exception) {
+        }
+    }
 
     fun start() {
         if (isRunning) return
@@ -47,23 +75,7 @@ object TorrentEngine {
         sm.start()
         sm.startDht()
         val settings = SettingsPack().apply {
-            enableDht(true)
-            setBoolean(settings_pack.bool_types.enable_upnp.swigValue(), true)
-            setBoolean(settings_pack.bool_types.enable_natpmp.swigValue(), true)
-            setBoolean(settings_pack.bool_types.enable_lsd.swigValue(), true)
-            setBoolean(settings_pack.bool_types.use_dht_as_fallback.swigValue(), true)
-            setBoolean(settings_pack.bool_types.announce_to_all_trackers.swigValue(), true)
-            setBoolean(settings_pack.bool_types.prefer_udp_trackers.swigValue(), false)
-            setBoolean(settings_pack.bool_types.enable_outgoing_tcp.swigValue(), true)
-            setBoolean(settings_pack.bool_types.enable_incoming_tcp.swigValue(), true)
-            setBoolean(settings_pack.bool_types.enable_outgoing_utp.swigValue(), true)
-            setBoolean(settings_pack.bool_types.enable_incoming_utp.swigValue(), true)
             setString(settings_pack.string_types.listen_interfaces.swigValue(), "0.0.0.0:0")
-            setString(
-                settings_pack.string_types.dht_bootstrap_nodes.swigValue(),
-                DHT_BOOTSTRAP_NODES.joinToString(",") { "${it.first}:${it.second}" }
-            )
-            setString(settings_pack.string_types.user_agent.swigValue(), "toolbox/1.1.5 libtorrent/1.2")
         }
         TorrentSettings.applyTo(settings)
         try {

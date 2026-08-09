@@ -236,7 +236,7 @@ object TorrentManager {
             val sb = StringBuilder()
             sb.append("引擎: ${if (TorrentEngine.isRunning) "运行" else "未运行"}\n")
             sb.append("DHT: ${if (TorrentEngine.dhtRunning) "运行" else "未运行"}\n")
-            sb.append("监听: ${TorrentEngine.listenPorts} (原生端口: ${TorrentEngine.nativeListenPort})\n")
+            sb.append("监听: ${TorrentEngine.listenPorts} (原生端口: ${TorrentEngine.nativeListenPort}, 状态: ${if (TorrentEngine.listening) "监听中" else "未监听"})\n")
             sb.append("最近错误: ${TorrentEngine.lastEngineError}\n")
             sb.append("任务数: ${snapshot().size}\n\n")
             for (item in snapshot()) {
@@ -323,6 +323,7 @@ object TorrentManager {
 
     fun refreshFromEngine() {
         TorrentEngine.refreshStatus()
+        TorrentEngine.ensureListening()
         for (item in snapshot()) {
             val h = TorrentEngine.find(item.infoHash) ?: continue
             val st = h.status()
