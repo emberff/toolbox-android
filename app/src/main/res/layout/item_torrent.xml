@@ -73,6 +73,13 @@
                 android:text="播放" />
 
             <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnTorrentFiles"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="文件" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnTorrentToggle"
                 style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="wrap_content"

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import com.frostwire.jlibtorrent.AddTorrentParams
+import com.frostwire.jlibtorrent.Priority
 import com.frostwire.jlibtorrent.TorrentHandle
 import com.frostwire.jlibtorrent.TorrentInfo
 import com.frostwire.jlibtorrent.TorrentStatus
@@ -20,6 +21,18 @@ object TorrentManager {
 
     private val lock = Any()
     private lateinit var appContext: Context
+
+    private val PUBLIC_TRACKERS = listOf(
+        "udp://tracker.opentrackr.org:1337/announce",
+        "udp://open.demonii.com:1337/announce",
+        "udp://tracker.openbittorrent.com:6969/announce",
+        "udp://exodus.desync.com:6969/announce",
+        "https://tracker.tamersunion.org:443/announce",
+        "udp://tracker.torrent.eu.org:451/announce",
+        "udp://open.stealth.si:80/announce",
+        "udp://explodie.org:6969/announce",
+        "udp://tracker.moeking.me:6969/announce"
+    )
 
     val torrents = MutableStateFlow<List<TorrentItem>>(emptyList())
 
@@ -75,6 +88,7 @@ object TorrentManager {
                 )
             }
             atp.savePath(saveDirPath())
+            withPublicTrackers(atp)
             TorrentEngine.add(atp)
             emit()
             persist()
@@ -84,7 +98,7 @@ object TorrentManager {
         }
     }
 
-    fun addTorrentFile(bytes: ByteArray): Int {
+    fun addTorrentFile(bytes: ByteArray, selectedIndices: Set<Int>? = null): Int {
         val ti = try {
             TorrentInfo.bdecode(bytes)
         } catch (e: Exception) {
@@ -114,10 +128,69 @@ object TorrentManager {
             torrentInfo(ti)
             savePath(saveDirPath())
         }
+        withPublicTrackers(atp)
+        selectedIndices?.let { selected ->
+            val n = ti.files().numFiles()
+            val bv = byte_vector()
+            for (i in 0 until n) {
+                bv.push_back(if (i in selected) Priority.NORMAL.swig().toByte() else Priority.IGNORE.swig().toByte())
+            }
+            try {
+                atp.swig().set_file_priorities2(bv)
+            } catch (ignored: Exception) {
+            }
+        }
         TorrentEngine.add(atp)
         emit()
         persist()
         return 0
+    }
+
+    fun setFilePriorities(hex: String, selectedIndices: Set<Int>) {
+        TorrentEngine.find(hex)?.let { TorrentEngine.applyFilePriorities(it, selectedIndices) }
+    }
+
+    fun torrentFileListFromBytes(bytes: ByteArray): List<TorrentFileInfo>? {
+        val ti = try {
+            TorrentInfo.bdecode(bytes)
+        } catch (e: Exception) {
+            return null
+        } ?: return null
+        return torrentFileList(ti)
+    }
+
+    fun torrentFileList(hex: String): List<TorrentFileInfo>? {
+        val handle = TorrentEngine.find(hex) ?: return null
+        val ti = handle.torrentFile() ?: return null
+        return torrentFileList(ti)
+    }
+
+    fun torrentFileList(ti: TorrentInfo): List<TorrentFileInfo> {
+        val fs = ti.files()
+        val list = mutableListOf<TorrentFileInfo>()
+        for (i in 0 until fs.numFiles()) {
+            val path = fs.filePath(i)
+            list.add(
+                TorrentFileInfo(
+                    index = i,
+                    path = path,
+                    name = path.substringAfterLast('/').ifBlank { path },
+                    size = fs.fileSize(i)
+                )
+            )
+        }
+        return list
+    }
+
+    private fun withPublicTrackers(atp: AddTorrentParams) {
+        try {
+            val current = atp.trackers().toMutableList()
+            for (t in PUBLIC_TRACKERS) {
+                if (t !in current) current.add(t)
+            }
+            atp.trackers(current)
+        } catch (ignored: Exception) {
+        }
     }
 
     fun pause(hex: String) {
@@ -163,6 +236,7 @@ object TorrentManager {
                     }
                     else -> AddTorrentParams.parseMagnetUri(item.sourceData)
                 }
+                withPublicTrackers(atp)
                 TorrentEngine.add(atp)
             } catch (ignored: Exception) {
             }
@@ -179,9 +253,13 @@ object TorrentManager {
                 name = st.name()
             }
             var hasVideo = item.hasVideo
+            var hasMetadata = item.hasMetadata
             val tf = h.torrentFile()
-            if (tf != null && !hasVideo) {
-                hasVideo = TorrentMediaPicker.pick(tf) != null
+            if (tf != null) {
+                hasMetadata = true
+                if (!hasVideo) {
+                    hasVideo = TorrentMediaPicker.pick(tf) != null
+                }
             }
             val updated = item.copy(
                 name = name,
@@ -193,7 +271,8 @@ object TorrentManager {
                 totalWanted = st.totalWanted(),
                 numPeers = st.numPeers(),
                 numSeeds = st.numSeeds(),
-                hasVideo = hasVideo
+                hasVideo = hasVideo,
+                hasMetadata = hasMetadata
             )
             synchronized(lock) { items[item.infoHash] = updated }
         }

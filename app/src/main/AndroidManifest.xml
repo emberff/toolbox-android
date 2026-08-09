@@ -47,6 +47,11 @@
             android:launchMode="singleTask" />
 
         <activity
+            android:name=".FileSelectActivity"
+            android:exported="false"
+            android:launchMode="singleTask" />
+
+        <activity
             android:name=".TorrentPlayerActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false"

@@ -16,7 +16,9 @@
 
 ### 2. 种子资源下载
 - 支持 **磁力链接 (Magnet)** 与 **.torrent 文件**
+- **文件选择下载**：添加种子后可勾选需要下载的文件，也可随时调整
 - 基于 libtorrent 原生引擎（jlibtorrent 1.2.0），支持 DHT、多 Tracker、做种
+- 自动附加公共 Tracker，提升磁力元数据获取成功率
 - 前台服务后台持续下载，开机自动恢复未完成任务
 - **断点续传**（fastresume 机制）
 - **边下边播**：MP4 / WebM / TS / 3GP 等格式下载中即可播放（ExoPlayer 流式读取 + piece 优先调度）

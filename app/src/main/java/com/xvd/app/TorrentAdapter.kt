@@ -13,7 +13,8 @@ class TorrentAdapter(
     private var items: List<TorrentItem>,
     private val onToggle: (TorrentItem) -> Unit,
     private val onDelete: (TorrentItem) -> Unit,
-    private val onPlay: (TorrentItem) -> Unit
+    private val onPlay: (TorrentItem) -> Unit,
+    private val onFiles: (TorrentItem) -> Unit
 ) : RecyclerView.Adapter<TorrentAdapter.VH>() {
 
     class VH(val view: View) : RecyclerView.ViewHolder(view)
@@ -41,6 +42,7 @@ class TorrentAdapter(
         val btnToggle = v.findViewById<MaterialButton>(R.id.btnTorrentToggle)
         val btnDelete = v.findViewById<MaterialButton>(R.id.btnTorrentDelete)
         val btnPlay = v.findViewById<MaterialButton>(R.id.btnTorrentPlay)
+        val btnFiles = v.findViewById<MaterialButton>(R.id.btnTorrentFiles)
 
         name.text = item.name.ifBlank { "获取中…" }
         status.text = if (item.isFinished) item.state else "${item.state} ${item.progressPercent()}%"
@@ -53,6 +55,8 @@ class TorrentAdapter(
         btnDelete.setOnClickListener { onDelete(item) }
         btnPlay.isEnabled = item.hasVideo
         btnPlay.setOnClickListener { onPlay(item) }
+        btnFiles.isEnabled = item.hasMetadata
+        btnFiles.setOnClickListener { onFiles(item) }
     }
 
     private fun formatRate(bytes: Long): String {

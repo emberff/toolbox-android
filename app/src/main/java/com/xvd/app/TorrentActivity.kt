@@ -72,7 +72,19 @@ class TorrentActivity : AppCompatActivity() {
                 }
             },
             onDelete = { TorrentManager.remove(it.infoHash) },
-            onPlay = { onPlay(it) }
+            onPlay = { onPlay(it) },
+            onFiles = { item ->
+                if (!item.hasMetadata) {
+                    toast("元数据尚未就绪，请稍候")
+                } else {
+                    startActivity(
+                        Intent(this, FileSelectActivity::class.java)
+                            .putExtra(FileSelectActivity.EXTRA_MODE, FileSelectActivity.MODE_INFO_HASH)
+                            .putExtra(FileSelectActivity.EXTRA_INFO_HASH, item.infoHash)
+                            .putExtra(FileSelectActivity.EXTRA_NAME, item.name)
+                    )
+                }
+            }
         )
         recycler.layoutManager = LinearLayoutManager(this)
         recycler.adapter = adapter
@@ -124,14 +136,11 @@ class TorrentActivity : AppCompatActivity() {
     private fun onTorrentFilePicked(uri: Uri) {
         try {
             val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
-            when (TorrentManager.addTorrentFile(bytes)) {
-                0 -> {
-                    toast("已添加任务")
-                    ensureService()
-                }
-                2 -> toast("该种子已在列表中")
-                else -> toast("无效的种子文件")
-            }
+            startActivity(
+                Intent(this, FileSelectActivity::class.java)
+                    .putExtra(FileSelectActivity.EXTRA_MODE, FileSelectActivity.MODE_FILE)
+                    .putExtra(FileSelectActivity.EXTRA_BYTES, bytes)
+            )
         } catch (e: Exception) {
             toast("读取文件失败: ${e.message}")
         }
