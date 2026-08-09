@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object JavaTrackerAnnouncer {
 
-    private const val HTTP_TRACKERS = "http://tracker.dler.org:80/announce,http://tracker.openbittorrent.com:80/announce,https://tracker.dler.org:443/announce,https://tracker.opentrackr.org:443/announce,https://tracker.bittor.pw:443/announce"
+    private const val HTTP_TRACKERS = "http://tracker.dler.org:80/announce,http://tracker.dler.org:80/announce,http://tracker.dler.org:80/announce,http://tracker.openbittorrent.com:80/announce,https://tracker.dler.org:443/announce,https://tracker.opentrackr.org:443/announce,https://tracker.bittor.pw:443/announce"
 
     private const val UDP_TRACKERS = "udp://tracker.dler.org:6969,udp://tracker.opentrackr.org:1337,udp://open.demonii.com:1337,udp://tracker.openbittorrent.com:6969,udp://exodus.desync.com:6969,udp://explodie.org:6969"
 
@@ -105,6 +105,8 @@ object JavaTrackerAnnouncer {
                     injected = injectPeers(h, reachable)
                     TorrentEngine.recordJavaAnnounce("注入可达peer: ${injected}个")
                 }
+                val ordered = (reachable + snap.filter { it !in reachable }).distinct()
+                JavaPeerClient.attempt(hex, ordered, pid)
                 val st2 = try {
                     h.status()
                 } catch (e: Exception) {
@@ -117,7 +119,6 @@ object JavaTrackerAnnouncer {
                 }
                 val lp = if (st2 != null) "发现${st2.listPeers()} 连接${st2.numPeers()}" else "状态读取失败"
                 TorrentEngine.recordJavaAnnounce("注入后: $lp Peers列表=${pi?.size ?: -1}")
-                JavaPeerClient.attempt(hex, snap, pid)
                 if (injected == 0) TorrentEngine.recordJavaAnnounce("java上报: 本轮未注入peer")
             } catch (e: Exception) {
                 TorrentEngine.recordJavaAnnounce("处理peer异常: ${e.message}")
@@ -380,7 +381,7 @@ object JavaTrackerAnnouncer {
                 var s: java.net.Socket? = null
                 try {
                     s = java.net.Socket()
-                    s.connect(java.net.InetSocketAddress(ip, p), 1500)
+                    s.connect(java.net.InetSocketAddress(ip, p), 3000)
                     result.add(ip to p)
                 } catch (ignored: Exception) {
                 } finally {

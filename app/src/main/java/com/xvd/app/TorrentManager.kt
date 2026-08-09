@@ -615,7 +615,7 @@ object TorrentManager {
     private val items = LinkedHashMap<String, TorrentItem>()
     private val metadataNudges = HashMap<String, Long>()
 
-    private val METADATA_NUDGE_INTERVAL = 60_000L
+    private val METADATA_NUDGE_INTERVAL = 15_000L
 
     private fun emit() {
         torrents.value = synchronized(lock) { items.values.toList() }
