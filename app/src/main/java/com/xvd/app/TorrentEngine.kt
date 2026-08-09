@@ -43,9 +43,20 @@ object TorrentEngine {
             false
         }
 
-    @Volatile
-    var lastEngineError: String = "无"
-        private set
+    private val _engineErrors = ArrayDeque<String>()
+
+    val engineErrors: List<String>
+        get() = synchronized(_engineErrors) { _engineErrors.toList() }
+
+    val lastEngineError: String
+        get() = engineErrors.lastOrNull() ?: "无"
+
+    private fun recordError(msg: String) {
+        synchronized(_engineErrors) {
+            _engineErrors.addLast(msg)
+            while (_engineErrors.size > 8) _engineErrors.removeFirst()
+        }
+    }
 
     @Volatile
     private var lastRebindAttempt = 0L
@@ -63,7 +74,7 @@ object TorrentEngine {
             }
             TorrentSettings.applyTo(settings)
             sm.applySettings(settings)
-            lastEngineError = "检测到未监听, 已重试绑定监听端口"
+            recordError("检测到未监听, 已重试绑定监听端口")
         } catch (ignored: Exception) {
         }
     }
@@ -238,6 +249,7 @@ object TorrentEngine {
             AlertType.LISTEN_FAILED.swig(),
             AlertType.TRACKER_ERROR.swig(),
             AlertType.TRACKER_REPLY.swig(),
+            AlertType.TRACKER_WARNING.swig(),
             AlertType.DHT_ERROR.swig(),
             AlertType.DHT_BOOTSTRAP.swig(),
             AlertType.TORRENT_ERROR.swig(),
@@ -253,11 +265,13 @@ object TorrentEngine {
                     is TorrentRemovedAlert -> TorrentManager.onTorrentRemoved(alert.handle())
                     is SaveResumeDataAlert -> TorrentManager.onSaveResumeData(alert)
                     is com.frostwire.jlibtorrent.alerts.ListenFailedAlert ->
-                        lastEngineError = "监听失败: ${alert.error().message()} (${alert.listenInterface()})"
+                        recordError("监听失败: ${alert.error().message()} (${alert.listenInterface()})")
                     is com.frostwire.jlibtorrent.alerts.TrackerErrorAlert ->
-                        lastEngineError = "Tracker错误: ${alert.message()}"
+                        recordError("Tracker错误: ${alert.message()}")
+                    is com.frostwire.jlibtorrent.alerts.TrackerWarningAlert ->
+                        recordError("Tracker警告: ${alert.message()}")
                     is com.frostwire.jlibtorrent.alerts.DhtErrorAlert ->
-                        lastEngineError = "DHT错误: ${alert.message()}"
+                        recordError("DHT错误: ${alert.message()}")
                     else -> {}
                 }
             } catch (ignored: Exception) {
