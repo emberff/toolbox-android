@@ -253,6 +253,7 @@ object TorrentEngine {
             AlertType.TRACKER_ERROR.swig(),
             AlertType.TRACKER_REPLY.swig(),
             AlertType.TRACKER_WARNING.swig(),
+            AlertType.PEER_ERROR.swig(),
             AlertType.DHT_ERROR.swig(),
             AlertType.DHT_BOOTSTRAP.swig(),
             AlertType.TORRENT_ERROR.swig(),
@@ -273,6 +274,8 @@ object TorrentEngine {
                         recordError("Tracker错误: ${alert.message()}")
                     is com.frostwire.jlibtorrent.alerts.TrackerWarningAlert ->
                         recordError("Tracker警告: ${alert.message()}")
+                    is com.frostwire.jlibtorrent.alerts.PeerErrorAlert ->
+                        recordError("peer连接失败 ${alert.endpoint()}: ${alert.error().message()}")
                     is com.frostwire.jlibtorrent.alerts.DhtErrorAlert ->
                         recordError("DHT错误: ${alert.message()}")
                     else -> {}

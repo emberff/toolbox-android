@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object JavaTrackerAnnouncer {
 
-    private const val HTTP_TRACKERS = "http://tracker.dler.org:80/announce,https://tracker.dler.org:443/announce,https://tracker.opentrackr.org:443/announce,http://tracker.openbittorrent.com:80/announce"
+    private const val HTTP_TRACKERS = "http://tracker.dler.org:80/announce,http://tracker.openbittorrent.com:80/announce,https://tracker.dler.org:443/announce,https://tracker.opentrackr.org:443/announce,https://tracker.bittor.pw:443/announce"
 
     private val announcing = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 

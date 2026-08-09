@@ -291,6 +291,19 @@ object TorrentManager {
                     val working = trackers.count { it.isVerified() }
                     sb.append("  状态: ${item.state} · 发现${st.listPeers()} 连接${st.numPeers()} 种子${st.numSeeds()}\n")
                     sb.append("  Tracker: 共${trackers.size}个, 成功上报${working}个\n")
+                    val pis = h.peerInfo()
+                    if (pis.isNotEmpty()) {
+                        sb.append("  Peers(${pis.size}):\n")
+                        for (pi in pis.take(6)) {
+                            val ft = when {
+                                pi.connectionType().name.contains("CONNECTING") -> "连接中"
+                                pi.connectionType().name.contains("CONNECTED") -> "已连接"
+                                pi.connectionType().name.contains("HANDSHAKE") -> "握手"
+                                else -> pi.connectionType().name
+                            }
+                            sb.append("    ${pi.ip()} $ft 下载${pi.downSpeed()}/s 进度${pi.progressPpm()}\n")
+                        }
+                    }
                     for (t in trackers) {
                         try {
                             val verified = if (t.isVerified()) "已验证" else "未验证"
