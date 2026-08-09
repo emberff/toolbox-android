@@ -67,6 +67,7 @@ class TorrentActivity : AppCompatActivity() {
         btnStorage.setOnClickListener { requestStorageAccess() }
         findViewById<MaterialButton>(R.id.btnNetworkTest).setOnClickListener { runNetworkTest() }
         findViewById<MaterialButton>(R.id.btnProxy).setOnClickListener { showProxyDialog() }
+        findViewById<MaterialButton>(R.id.btnDiagnose).setOnClickListener { runDiagnostics() }
 
         adapter = TorrentAdapter(
             emptyList(),
@@ -277,6 +278,21 @@ class TorrentActivity : AppCompatActivity() {
                 tvEngine.text = result.trim()
                 AlertDialog.Builder(this)
                     .setTitle("网络连通性测试")
+                    .setMessage(result)
+                    .setPositiveButton("确定", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun runDiagnostics() {
+        val tvEngine = findViewById<TextView>(R.id.tvEngineStatus)
+        tvEngine.text = "正在收集诊断…"
+        TorrentManager.buildDiagnostics { result ->
+            runOnUiThread {
+                tvEngine.text = "诊断完成"
+                AlertDialog.Builder(this)
+                    .setTitle("引擎诊断")
                     .setMessage(result)
                     .setPositiveButton("确定", null)
                     .show()

@@ -26,18 +26,19 @@ object TorrentManager {
         "udp://tracker.opentrackr.org:1337/announce",
         "http://tracker.opentrackr.org:1337/announce",
         "https://tracker.opentrackr.org:443/announce",
+        "udp://tracker.dler.org:6969/announce",
+        "http://tracker.dler.org:80/announce",
+        "https://tracker.dler.org:443/announce",
         "udp://open.demonii.com:1337/announce",
         "udp://open.stealth.si:80/announce",
         "udp://explodie.org:6969/announce",
         "udp://tracker.torrent.eu.org:451/announce",
-        "udp://tracker.dler.org:6969/announce",
-        "https://tracker.dler.org:443/announce",
         "udp://tracker.openbittorrent.com:6969/announce",
         "http://tracker.openbittorrent.com:80/announce",
         "udp://exodus.desync.com:6969/announce",
-        "https://p4p.arenabg.com:1337/announce",
         "udp://tracker.bittor.pw:1337/announce",
-        "udp://tracker.cyberia.is:6969/announce"
+        "https://tracker.bittor.pw:443/announce",
+        "https://p4p.arenabg.com:1337/announce"
     )
 
     val torrents = MutableStateFlow<List<TorrentItem>>(emptyList())
@@ -230,8 +231,35 @@ object TorrentManager {
         }.start()
     }
 
-    fun testConnectivity(callback: (String) -> Unit) {
+    fun buildDiagnostics(callback: (String) -> Unit) {
         Thread {
+            val sb = StringBuilder()
+            sb.append("引擎: ${if (TorrentEngine.isRunning) "运行" else "未运行"}\n")
+            sb.append("DHT: ${if (TorrentEngine.dhtRunning) "运行" else "未运行"}\n")
+            sb.append("监听: ${TorrentEngine.listenPorts}\n")
+            sb.append("任务数: ${snapshot().size}\n\n")
+            for (item in snapshot()) {
+                val h = TorrentEngine.find(item.infoHash)
+                sb.append("· ${item.name.take(24)}\n")
+                if (h == null) {
+                    sb.append("  (引擎中无此任务句柄)\n")
+                    continue
+                }
+                try {
+                    val st = h.status()
+                    val trackers = h.trackers()
+                    val working = trackers.count { it.isVerified() }
+                    sb.append("  状态: ${item.state} · 发现${st.listPeers()} 连接${st.numPeers()} 种子${st.numSeeds()}\n")
+                    sb.append("  Tracker: 共${trackers.size}个, 成功上报${working}个\n")
+                } catch (e: Exception) {
+                    sb.append("  读取状态失败: ${e.message}\n")
+                }
+            }
+            callback(sb.toString())
+        }.start()
+    }
+
+    fun testConnectivity(callback: (String) -> Unit) {        Thread {
             val sb = StringBuilder()
             val targets = listOf(
                 "github.com" to 443,
@@ -320,6 +348,7 @@ object TorrentManager {
                 totalWanted = st.totalWanted(),
                 numPeers = st.numPeers(),
                 numSeeds = st.numSeeds(),
+                peerList = st.listPeers(),
                 hasVideo = hasVideo,
                 hasMetadata = hasMetadata
             )

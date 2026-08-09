@@ -39,6 +39,7 @@ object TorrentEngine {
             setBoolean(settings_pack.bool_types.enable_lsd.swigValue(), true)
             setBoolean(settings_pack.bool_types.use_dht_as_fallback.swigValue(), true)
             setBoolean(settings_pack.bool_types.announce_to_all_trackers.swigValue(), true)
+            setBoolean(settings_pack.bool_types.prefer_udp_trackers.swigValue(), false)
             setBoolean(settings_pack.bool_types.enable_outgoing_tcp.swigValue(), true)
             setBoolean(settings_pack.bool_types.enable_incoming_tcp.swigValue(), true)
             setBoolean(settings_pack.bool_types.enable_outgoing_utp.swigValue(), true)

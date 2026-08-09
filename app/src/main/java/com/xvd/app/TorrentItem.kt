@@ -14,6 +14,7 @@ data class TorrentItem(
     val totalWanted: Long,
     val numPeers: Int,
     val numSeeds: Int,
+    val peerList: Int = 0,
     val hasVideo: Boolean = false,
     val hasMetadata: Boolean = false
 ) {

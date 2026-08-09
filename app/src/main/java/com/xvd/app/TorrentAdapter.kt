@@ -49,7 +49,7 @@ class TorrentAdapter(
         name.text = item.name.ifBlank { "获取中…" }
         status.text = if (item.isFinished) item.state else "${item.state} ${item.progressPercent()}%"
         progress.progress = item.progressPercent()
-        speed.text = "↓${formatRate(item.downloadRate)}/s ↑${formatRate(item.uploadRate)}/s · 种子${item.numSeeds} 用户${item.numPeers}"
+        speed.text = "发现${item.peerList} · 种子${item.numSeeds} 用户${item.numPeers} · ↓${formatRate(item.downloadRate)}/s ↑${formatRate(item.uploadRate)}/s"
 
         val running = RUNNING_STATES.contains(item.state)
         btnToggle.text = if (running) "暂停" else "继续"
