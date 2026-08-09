@@ -57,45 +57,75 @@ object JavaTrackerAnnouncer {
                 val infohash = hexToBytes(hex)
                 val pid = ensurePeerId()
                 val port = TorrentEngine.nativeListenPort
-                var injected = 0
-                val allPeers = mutableListOf<Pair<String, Int>>()
+                val allPeers = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, Int>>()
+                val firstPeers = java.util.concurrent.CountDownLatch(1)
+
+                Thread {
+                    try {
+                        if (!firstPeers.await(6, java.util.concurrent.TimeUnit.SECONDS)) return@Thread
+                        val snap = allPeers.toList().distinct().filter { it.second in 1..65535 }
+                        if (snap.isEmpty()) return@Thread
+                        val reachable = probeReachable(snap)
+                        TorrentEngine.recordJavaAnnounce("连接探测: 共${snap.size}个 可达${reachable.size}个 " + reachable.take(6).joinToString(" ") { "${it.first}:${it.second}" })
+                        var injected = 0
+                        if (reachable.isNotEmpty()) {
+                            injected = injectPeers(h, reachable)
+                            TorrentEngine.recordJavaAnnounce("注入可达peer: ${injected}个")
+                        }
+                        val st2 = try {
+                            h.status()
+                        } catch (e: Exception) {
+                            null
+                        }
+                        val pi = try {
+                            h.peerInfo()
+                        } catch (e: Exception) {
+                            null
+                        }
+                        val lp = if (st2 != null) "发现${st2.listPeers()} 连接${st2.numPeers()}" else "状态读取失败"
+                        TorrentEngine.recordJavaAnnounce("注入后: $lp Peers列表=${pi?.size ?: -1}")
+                        if (snap.isNotEmpty()) JavaPeerClient.attempt(hex, snap, pid)
+                        if (injected == 0) TorrentEngine.recordJavaAnnounce("java上报: 本轮未注入peer")
+                    } catch (e: Exception) {
+                        TorrentEngine.recordJavaAnnounce("处理peer异常: ${e.message}")
+                    }
+                }.start()
+
+                val futures = mutableListOf<java.util.concurrent.Future<*>>()
                 for (url in trackerList()) {
-                    var r: List<Pair<String, Int>>? = null
-                    if (url.startsWith("udp://")) {
-                        r = udpAnnounceOnce(url, infohash, pid, port)
-                    } else if (url.contains("://")) {
-                        val u = java.net.URI(url)
-                        val ip = resolveDoh(u.host)
-                        if (ip != null && ip != u.host) {
-                            val tag = compactUrl(url)
-                            r = announceOnceAtIp(url, ip, infohash, pid, port)
-                            if (r != null) TorrentEngine.recordJavaAnnounce("java上报 $tag @$ip: 返回${r.size}个")
-                        } else {
-                            r = announceOnce(url, infohash, pid, port)
+                    futures.add(sourcePool.submit {
+                        try {
+                            var r: List<Pair<String, Int>>? = null
+                            if (url.startsWith("udp://")) {
+                                r = udpAnnounceOnce(url, infohash, pid, port)
+                            } else if (url.contains("://")) {
+                                val u = java.net.URI(url)
+                                val ip = resolveDoh(u.host)
+                                if (ip != null && ip != u.host) {
+                                    r = announceOnceAtIp(url, ip, infohash, pid, port)
+                                } else {
+                                    r = announceOnce(url, infohash, pid, port)
+                                }
+                            }
+                            when {
+                                r == null -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 网络失败")
+                                r.isEmpty() -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回0个peer")
+                                else -> {
+                                    allPeers.addAll(r)
+                                    firstPeers.countDown()
+                                    TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回${r.size}个")
+                                }
+                            }
+                        } catch (ignored: Exception) {
                         }
-                    }
-                    when {
-                        r == null -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 网络失败")
-                        r.isEmpty() -> TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回0个peer")
-                        else -> {
-                            allPeers.addAll(r)
-                            TorrentEngine.recordJavaAnnounce("java上报 ${compactUrl(url)}: 返回${r.size}个")
-                        }
+                    })
+                }
+                for (f in futures) {
+                    try {
+                        f.get(15, java.util.concurrent.TimeUnit.SECONDS)
+                    } catch (ignored: Exception) {
                     }
                 }
-                val reachable = probeReachable(allPeers.distinct().filter { it.second in 1..65535 })
-                TorrentEngine.recordJavaAnnounce("连接探测: 共${allPeers.size}个 可达${reachable.size}个 " + reachable.take(8).joinToString(" ") { "${it.first}:${it.second}" })
-                if (reachable.isNotEmpty()) {
-                    injected += injectPeers(h, reachable)
-                    TorrentEngine.recordJavaAnnounce("注入可达peer: ${injected}个")
-                }
-                val st2 = try { h.status() } catch (e: Exception) { null }
-                val pi = try { h.peerInfo() } catch (e: Exception) { null }
-                val lp = if (st2 != null) "发现${st2.listPeers()} 连接${st2.numPeers()}" else "状态读取失败"
-                val pc = pi?.size ?: -1
-                TorrentEngine.recordJavaAnnounce("注入后: $lp Peers列表=$pc")
-                if (allPeers.isNotEmpty()) JavaPeerClient.attempt(hex, allPeers, pid)
-                if (injected == 0) TorrentEngine.recordJavaAnnounce("java上报: 本轮未注入peer")
             } catch (ignored: Exception) {
             } finally {
                 announcing.remove(key)
@@ -344,6 +374,7 @@ object JavaTrackerAnnouncer {
     }
 
     private val reachPool = java.util.concurrent.Executors.newFixedThreadPool(6)
+    private val sourcePool = java.util.concurrent.Executors.newFixedThreadPool(8)
 
     fun probeReachable(peers: List<Pair<String, Int>>): List<Pair<String, Int>> {
         if (peers.isEmpty()) return emptyList()
