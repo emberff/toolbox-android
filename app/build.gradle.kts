@@ -11,8 +11,8 @@ android {
         applicationId = "com.xvd.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 35
-        versionName = "1.5.5"
+        versionCode = 36
+        versionName = "1.5.6"
     }
 
     signingConfigs {

@@ -53,7 +53,10 @@ object JavaDownloader {
                     var completed = false
                     for ((ip, p) in reachable) {
                         val sess = JavaPeerClient.connectHandshake(ip, p, infohash, pid)
-                        if (sess == null) continue
+                        if (sess == null) {
+                            TorrentEngine.recordJavaAnnounce("数据: $ip:$p 握手失败")
+                            continue
+                        }
                         TorrentEngine.recordJavaAnnounce("数据: 已连 $ip:$p, 开始下载")
                         try {
                             val before = countHave(hex, td.infoHashes.size)
