@@ -25,7 +25,7 @@ class HomeActivity : AppCompatActivity() {
             ),
             ModuleItem(
                 title = "种子资源下载",
-                subtitle = "粘贴磁力链接或选择 .torrent 文件，支持边下边播",
+                subtitle = "粘贴磁力链接或选择 .torrent 文件，支持边下边播（未完成）",
                 iconRes = R.drawable.ic_module_torrent,
                 target = TorrentActivity::class.java
             )
