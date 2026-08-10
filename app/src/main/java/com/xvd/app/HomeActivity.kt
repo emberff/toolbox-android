@@ -50,6 +50,29 @@ class HomeActivity : AppCompatActivity() {
                 )
             }
         }
+
+        findViewById<MaterialButton>(R.id.btnExit).setOnClickListener { exitApp() }
+    }
+
+    private fun exitApp() {
+        try {
+            TorrentManager.saveAllResume()
+        } catch (ignored: Exception) {
+        }
+        try {
+            stopService(Intent(this, ClipboardMonitorService::class.java))
+        } catch (ignored: Exception) {
+        }
+        try {
+            stopService(Intent(this, TorrentService::class.java))
+        } catch (ignored: Exception) {
+        }
+        try {
+            TorrentEngine.stop()
+        } catch (ignored: Exception) {
+        }
+        finishAffinity()
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     override fun onResume() {

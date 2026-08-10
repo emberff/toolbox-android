@@ -36,7 +36,7 @@ class TorrentService : Service() {
         TorrentEngine.start()
         TorrentManager.resumeAll()
         startPolling()
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun startAsForeground() {

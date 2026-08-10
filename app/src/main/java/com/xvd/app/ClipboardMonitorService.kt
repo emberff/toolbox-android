@@ -40,7 +40,7 @@ class ClipboardMonitorService : Service() {
         } catch (ignored: Exception) {
         }
         ClipboardProcessor.process(this)
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun startAsForeground() {
