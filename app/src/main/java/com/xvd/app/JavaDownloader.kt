@@ -20,7 +20,12 @@ object JavaDownloader {
         if (!running.compareAndSet(false, true)) return
         Thread {
             try {
-                val td = loadTorrent(hex) ?: return@Thread
+                val td = loadTorrent(hex)
+                if (td == null) {
+                    TorrentEngine.recordJavaAnnounce("数据: 无法读取torrent文件")
+                    return@Thread
+                }
+                TorrentEngine.recordJavaAnnounce("数据: 下载器启动 ${td.infoHashes.size}片 片长${td.pieceLength}")
                 val infohash = JavaPeerClient.hexToBytes(hex)
                 val pid = JavaTrackerAnnouncer.peerId()
                 val budget = System.currentTimeMillis() + 30 * 60 * 1000L
@@ -58,6 +63,7 @@ object JavaDownloader {
                                 td.totalSize,
                                 td.infoHashes,
                                 havePieces = { i -> isHave(hex, i) },
+                                onStatus = { s -> TorrentEngine.recordJavaAnnounce("数据: $ip:$p $s") },
                                 onPiece = { piece, data ->
                                     val ok = addPiece(hex, piece, data)
                                     if (ok) downloadedPieces[piece] = true

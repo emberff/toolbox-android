@@ -314,11 +314,13 @@ object JavaPeerClient {
         totalSize: Long,
         infoHashes: List<ByteArray>,
         havePieces: (Int) -> Boolean,
-        onPiece: (Int, ByteArray) -> Boolean
+        onPiece: (Int, ByteArray) -> Boolean,
+        onStatus: (String) -> Unit = {}
     ): Boolean {
         val blockSize = 16384
         try {
             sendMessage(sess, 2, ByteArray(0))
+            onStatus("已发interested")
             val unchokeDeadline = System.currentTimeMillis() + 15000
             var unchoked = false
             while (System.currentTimeMillis() < unchokeDeadline && !unchoked) {
@@ -327,7 +329,11 @@ object JavaPeerClient {
                 val id = msg[0].toInt() and 0xff
                 if (id == 1) unchoked = true
             }
-            if (!unchoked) return false
+            if (!unchoked) {
+                onStatus("未获unchoke(15s)")
+                return false
+            }
+            onStatus("已unchoke")
             for (piece in 0 until infoHashes.size) {
                 if (havePieces(piece)) continue
                 val pieceSize = minOf(pieceLength.toLong(), totalSize - piece.toLong() * pieceLength).toInt()
@@ -356,16 +362,23 @@ object JavaPeerClient {
                         }
                     }
                 }
-                if (blocks.size < numBlocks) return false
+                if (blocks.size < numBlocks) {
+                    onStatus("片$piece 缺块${blocks.size}/$numBlocks")
+                    return false
+                }
                 val buf = ByteArray(pieceSize)
                 for ((off, data) in blocks) {
                     System.arraycopy(data, 0, buf, off, minOf(data.size, pieceSize - off))
                 }
-                if (!sha1(buf).contentEquals(infoHashes[piece])) return false
+                if (!sha1(buf).contentEquals(infoHashes[piece])) {
+                    onStatus("片$piece SHA1不符")
+                    return false
+                }
                 if (!onPiece(piece, buf)) return false
             }
             return true
         } catch (e: Exception) {
+            onStatus("异常:${e.message}")
             return false
         }
     }
