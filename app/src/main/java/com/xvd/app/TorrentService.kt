@@ -69,6 +69,11 @@ class TorrentService : Service() {
         }
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        stopSelf()
+    }
+
     override fun onDestroy() {
         pollJob?.cancel()
         Thread {
