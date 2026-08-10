@@ -106,7 +106,7 @@ object JavaTrackerAnnouncer {
                     TorrentEngine.recordJavaAnnounce("注入可达peer: ${injected}个")
                 }
                 val ordered = (reachable + snap.filter { it !in reachable }).distinct()
-                JavaPeerClient.attempt(hex, ordered, pid)
+                JavaPeerClient.attempt(hex, ordered, pid, reachable.map { it.first }.toSet())
                 val st2 = try {
                     h.status()
                 } catch (e: Exception) {

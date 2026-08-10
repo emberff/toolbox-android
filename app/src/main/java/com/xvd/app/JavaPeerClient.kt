@@ -16,17 +16,23 @@ object JavaPeerClient {
     private val busy = AtomicBoolean(false)
     private val tried = Collections.synchronizedSet(mutableSetOf<String>())
 
-    fun attempt(hex: String, peers: List<Pair<String, Int>>, peerId: ByteArray) {
-        if (busy.get()) return
+    fun attempt(hex: String, peers: List<Pair<String, Int>>, peerId: ByteArray, reachable: Set<String> = emptySet()) {
         val all = peers.distinct().filter { it.second in 1..65535 }
         if (all.isEmpty()) return
+        if (!busy.compareAndSet(false, true)) {
+            TorrentEngine.recordJavaAnnounce("元数据: 上一轮仍在进行,跳过本轮")
+            return
+        }
         Thread {
-            if (!busy.compareAndSet(false, true)) return@Thread
             val executor = java.util.concurrent.Executors.newFixedThreadPool(3)
             try {
                 val infohash = hexToBytes(hex)
-                val fresh = all.filter { tried.add("${it.first}:${it.second}") }.take(8)
-                if (fresh.isEmpty()) return@Thread
+                val fresh = all.filter { it.first in reachable || tried.add("${it.first}:${it.second}") }.take(8)
+                if (fresh.isEmpty()) {
+                    TorrentEngine.recordJavaAnnounce("元数据: 无新peer可试")
+                    return@Thread
+                }
+                TorrentEngine.recordJavaAnnounce("元数据: 开始尝试${fresh.size}个: " + fresh.take(4).joinToString(" ") { "${it.first}:${it.second}" })
                 val success = AtomicBoolean(false)
                 for ((ip, p) in fresh) {
                     if (success.get()) break
@@ -43,7 +49,7 @@ object JavaPeerClient {
                     }
                 }
                 executor.shutdown()
-                executor.awaitTermination(90, java.util.concurrent.TimeUnit.SECONDS)
+                executor.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS)
                 if (!success.get()) TorrentEngine.recordJavaAnnounce("元数据: 本轮未获元数据")
             } finally {
                 busy.set(false)
@@ -78,8 +84,8 @@ object JavaPeerClient {
         var socket: Socket? = null
         return try {
             socket = Socket()
-            socket.connect(InetSocketAddress(ip, port), 8000)
-            socket.soTimeout = 12000
+            socket.connect(InetSocketAddress(ip, port), 5000)
+            socket.soTimeout = 10000
             socket.tcpNoDelay = true
             val sess = Session(socket.getInputStream(), socket.getOutputStream(), null, null, Pending(), false)
             sess.output.write(buildHandshake(infohash, peerId))
@@ -100,8 +106,8 @@ object JavaPeerClient {
         var socket: Socket? = null
         return try {
             socket = Socket()
-            socket.connect(InetSocketAddress(ip, port), 8000)
-            socket.soTimeout = 12000
+            socket.connect(InetSocketAddress(ip, port), 5000)
+            socket.soTimeout = 10000
             socket.tcpNoDelay = true
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
@@ -192,7 +198,7 @@ object JavaPeerClient {
         var got = false
         var requested = false
         val pieces = mutableMapOf<Int, ByteArray>()
-        val deadline = System.currentTimeMillis() + 25000
+        val deadline = System.currentTimeMillis() + 15000
         while (System.currentTimeMillis() < deadline) {
             if (got && !requested) {
                 requested = true
