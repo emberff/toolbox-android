@@ -59,6 +59,8 @@ object TorrentManager {
 
     fun saveDirPath(): String = saveDir().absolutePath
 
+    fun torrentFilePath(hex: String): String = File(appContext.filesDir, "torrents/$hex.torrent").absolutePath
+
     fun snapshot(): List<TorrentItem> = synchronized(lock) { items.values.toList() }
 
     fun isEmpty(): Boolean = synchronized(lock) { items.isEmpty() }
@@ -526,8 +528,14 @@ object TorrentManager {
                     }
                     JavaTrackerAnnouncer.announce(item.infoHash)
                 }
-            } else {
+            } else if (downloadingMetadata) {
                 metadataNudges.remove(item.infoHash)
+            }
+
+            val downloadingData = st.state() == TorrentStatus.State.DOWNLOADING ||
+                st.state() == TorrentStatus.State.SEEDING
+            if (downloadingData && st.progress() < 1.0f) {
+                JavaDownloader.start(item.infoHash)
             }
         }
         emit()

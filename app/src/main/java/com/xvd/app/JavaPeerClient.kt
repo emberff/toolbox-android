@@ -59,13 +59,14 @@ object JavaPeerClient {
         }.start()
     }
 
-    private class Session(
+    internal class Session(
         val input: InputStream,
         val output: OutputStream,
         val enc: RC4?,
         val dec: RC4?,
         val pending: Pending,
-        val encrypted: Boolean
+        val encrypted: Boolean,
+        val socket: Socket? = null
     )
 
     private fun fetchFromPeer(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray): Pair<ByteArray?, String> {
@@ -89,6 +90,20 @@ object JavaPeerClient {
     }
 
     private fun fetchPlain(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>): ByteArray? {
+        val sess = plainHandshake(ip, port, infohash, peerId, stage) ?: return null
+        try {
+            val info = metadataExchange(sess, infohash, peerId, stage)
+            if (info == null) stage.add("未获元数据")
+            return info
+        } finally {
+            try {
+                sess.socket?.close()
+            } catch (ignored: Exception) {
+            }
+        }
+    }
+
+    private fun plainHandshake(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>): Session? {
         var socket: Socket? = null
         return try {
             socket = Socket()
@@ -96,7 +111,7 @@ object JavaPeerClient {
             socket.soTimeout = 15000
             socket.tcpNoDelay = true
             stage.add("已连接")
-            val sess = Session(socket.getInputStream(), socket.getOutputStream(), null, null, Pending(), false)
+            val sess = Session(socket.getInputStream(), socket.getOutputStream(), null, null, Pending(), false, socket)
             sess.output.write(buildHandshake(infohash, peerId))
             sess.output.flush()
             val reply = readDecrypted(sess, 68) ?: run { stage.add("握手无响应"); return null }
@@ -109,18 +124,32 @@ object JavaPeerClient {
                 return null
             }
             stage.add("握手完成")
-            val info = metadataExchange(sess, infohash, peerId, stage)
-            if (info == null) stage.add("未获元数据")
-            info
-        } finally {
+            sess
+        } catch (e: Exception) {
             try {
                 socket?.close()
             } catch (ignored: Exception) {
             }
+            null
         }
     }
 
-    private fun fetchEncrypted(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>): ByteArray? {
+    internal fun connectHandshake(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>? = null): Session? {
+        val s = stage ?: java.util.Collections.synchronizedList(mutableListOf<String>())
+        val enc = try {
+            encryptedHandshake(ip, port, infohash, peerId, s)
+        } catch (e: Exception) {
+            null
+        }
+        if (enc != null) return enc
+        return try {
+            plainHandshake(ip, port, infohash, peerId, s)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun encryptedHandshake(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>): Session? {
         var socket: Socket? = null
         return try {
             socket = Socket()
@@ -198,7 +227,8 @@ object JavaPeerClient {
             val pending = Pending()
             val hp = 14 + lenPad
             if (tail2.size > hp) pending.add(tail2, hp, tail2.size - hp)
-            val peerHs = readDecrypted(Session(input, output, enc, dec, pending, rc4Mode), 68) ?: run { stage.add("等握手无响应"); return null }
+            val sess = Session(input, output, enc, dec, pending, rc4Mode, socket)
+            val peerHs = readDecrypted(sess, 68) ?: run { stage.add("等握手无响应"); return null }
             if (peerHs[0].toInt() != 19) {
                 stage.add("握手非法")
                 return null
@@ -208,12 +238,25 @@ object JavaPeerClient {
                 return null
             }
             stage.add("握手完成")
-            val info = metadataExchange(Session(input, output, enc, dec, pending, rc4Mode), infohash, peerId, stage)
-            if (info == null) stage.add("未获元数据")
-            info
-        } finally {
+            sess
+        } catch (e: Exception) {
             try {
                 socket?.close()
+            } catch (ignored: Exception) {
+            }
+            null
+        }
+    }
+
+    private fun fetchEncrypted(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>): ByteArray? {
+        val sess = encryptedHandshake(ip, port, infohash, peerId, stage) ?: return null
+        try {
+            val info = metadataExchange(sess, infohash, peerId, stage)
+            if (info == null) stage.add("未获元数据")
+            return info
+        } finally {
+            try {
+                sess.socket?.close()
             } catch (ignored: Exception) {
             }
         }
@@ -265,6 +308,68 @@ object JavaPeerClient {
         return info
     }
 
+    internal fun downloadFromPeer(
+        sess: Session,
+        pieceLength: Int,
+        totalSize: Long,
+        infoHashes: List<ByteArray>,
+        havePieces: (Int) -> Boolean,
+        onPiece: (Int, ByteArray) -> Boolean
+    ): Boolean {
+        val blockSize = 16384
+        try {
+            sendMessage(sess, 2, ByteArray(0))
+            val unchokeDeadline = System.currentTimeMillis() + 15000
+            var unchoked = false
+            while (System.currentTimeMillis() < unchokeDeadline && !unchoked) {
+                val msg = readMessage(sess) ?: return false
+                if (msg.isEmpty()) continue
+                val id = msg[0].toInt() and 0xff
+                if (id == 1) unchoked = true
+            }
+            if (!unchoked) return false
+            for (piece in 0 until infoHashes.size) {
+                if (havePieces(piece)) continue
+                val pieceSize = minOf(pieceLength.toLong(), totalSize - piece.toLong() * pieceLength).toInt()
+                val numBlocks = (pieceSize + blockSize - 1) / blockSize
+                for (b in 0 until numBlocks) {
+                    val off = b * blockSize
+                    val len = minOf(blockSize, pieceSize - off)
+                    val req = ByteArray(13)
+                    putInt(req, 1, piece)
+                    putInt(req, 5, off)
+                    putInt(req, 9, len)
+                    sendMessage(sess, 6, req)
+                }
+                val blocks = HashMap<Int, ByteArray>()
+                val deadline = System.currentTimeMillis() + 30000
+                while (blocks.size < numBlocks && System.currentTimeMillis() < deadline) {
+                    val msg = readMessage(sess) ?: return false
+                    if (msg.isEmpty()) continue
+                    val id = msg[0].toInt() and 0xff
+                    if (id == 7) {
+                        if (msg.size < 13) continue
+                        val p = getInt(msg, 1)
+                        val off = getInt(msg, 5)
+                        if (p == piece && !blocks.containsKey(off)) {
+                            blocks[off] = msg.copyOfRange(9, msg.size)
+                        }
+                    }
+                }
+                if (blocks.size < numBlocks) return false
+                val buf = ByteArray(pieceSize)
+                for ((off, data) in blocks) {
+                    System.arraycopy(data, 0, buf, off, minOf(data.size, pieceSize - off))
+                }
+                if (!sha1(buf).contentEquals(infoHashes[piece])) return false
+                if (!onPiece(piece, buf)) return false
+            }
+            return true
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
     private fun assemble(metadataSize: Int, pieces: Map<Int, ByteArray>): ByteArray? {
         val total = (metadataSize + PIECE_SIZE - 1) / PIECE_SIZE
         if (pieces.size < total) return null
@@ -278,7 +383,7 @@ object JavaPeerClient {
         return out
     }
 
-    private class Pending {
+    internal class Pending {
         private var buf = ByteArray(16384)
         private var start = 0
         private var len = 0
@@ -310,7 +415,7 @@ object JavaPeerClient {
         }
     }
 
-    private fun readDecrypted(sess: Session, n: Int): ByteArray? {
+    internal fun readDecrypted(sess: Session, n: Int): ByteArray? {
         while (sess.pending.available() < n) {
             val raw = ByteArray(4096)
             val r = sess.input.read(raw)
@@ -321,7 +426,7 @@ object JavaPeerClient {
         return sess.pending.take(n)
     }
 
-    private fun readMessage(sess: Session): ByteArray? {
+    internal fun readMessage(sess: Session): ByteArray? {
         val lb = readDecrypted(sess, 4) ?: return null
         val len = getInt(lb, 0)
         if (len == 0) return ByteArray(0)
@@ -329,7 +434,7 @@ object JavaPeerClient {
         return readDecrypted(sess, len)
     }
 
-    private fun sendMessage(sess: Session, id: Int, payload: ByteArray) {
+    internal fun sendMessage(sess: Session, id: Int, payload: ByteArray) {
         val len = payload.size + 1
         val hdr = byteArrayOf((len ushr 24).toByte(), (len ushr 16).toByte(), (len ushr 8).toByte(), len.toByte(), id.toByte())
         if (sess.encrypted) {
@@ -358,7 +463,7 @@ object JavaPeerClient {
         sendMessage(sess, 20, byteArrayOf(utMetadata.toByte()) + payload)
     }
 
-    private fun readExact(input: InputStream, buf: ByteArray, off: Int, n: Int) {
+    internal fun readExact(input: InputStream, buf: ByteArray, off: Int, n: Int) {
         var read = 0
         while (read < n) {
             val r = input.read(buf, off + read, n - read)
@@ -474,7 +579,7 @@ object JavaPeerClient {
         return true
     }
 
-    private class RC4(private val key: ByteArray) {
+    internal class RC4(private val key: ByteArray) {
         private val s = IntArray(256)
         private var x = 0
         private var y = 0
@@ -515,7 +620,7 @@ object JavaPeerClient {
         }
     }
 
-    private fun sha1(vararg parts: ByteArray): ByteArray {
+    internal fun sha1(vararg parts: ByteArray): ByteArray {
         val md = java.security.MessageDigest.getInstance("SHA-1")
         for (p in parts) md.update(p)
         return md.digest()
@@ -551,7 +656,7 @@ object JavaPeerClient {
         return r
     }
 
-    private fun putInt(b: ByteArray, off: Int, v: Int) {
+    internal fun putInt(b: ByteArray, off: Int, v: Int) {
         b[off] = (v ushr 24).toByte()
         b[off + 1] = (v ushr 16).toByte()
         b[off + 2] = (v ushr 8).toByte()
@@ -563,7 +668,7 @@ object JavaPeerClient {
         b[off + 1] = v.toByte()
     }
 
-    private fun getInt(b: ByteArray, off: Int): Int {
+    internal fun getInt(b: ByteArray, off: Int): Int {
         return ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or
             ((b[off + 2].toInt() and 0xff) shl 8) or (b[off + 3].toInt() and 0xff)
     }
@@ -707,7 +812,7 @@ object JavaPeerClient {
         out.write(b)
     }
 
-    private fun hexToBytes(hex: String): ByteArray {
+    internal fun hexToBytes(hex: String): ByteArray {
         val out = ByteArray(hex.length / 2)
         for (i in out.indices) {
             out[i] = hex.substring(i * 2, i * 2 + 2).toInt(16).toByte()

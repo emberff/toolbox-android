@@ -20,6 +20,10 @@ object JavaTrackerAnnouncer {
 
     private var peerId: ByteArray? = null
 
+    internal fun peerId(): ByteArray {
+        return ensurePeerId()
+    }
+
     private fun ensurePeerId(): ByteArray {
         peerId?.let { return it }
         val charset = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -136,6 +140,51 @@ object JavaTrackerAnnouncer {
                 announcing.remove(key)
             }
         }.start()
+    }
+
+    fun announceForPeers(hex: String): List<Pair<String, Int>> {
+        val infohash = hexToBytes(hex)
+        val pid = ensurePeerId()
+        val port = TorrentEngine.nativeListenPort
+        val allPeers = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, Int>>()
+        val futures = mutableListOf<java.util.concurrent.Future<*>>()
+        for (url in trackerList()) {
+            futures.add(sourcePool.submit {
+                try {
+                    var r: List<Pair<String, Int>>? = null
+                    if (url.startsWith("udp://")) {
+                        r = udpAnnounceOnce(url, infohash, pid, port)
+                    } else if (url.contains("://")) {
+                        val u = java.net.URI(url)
+                        var done = false
+                        val dohIp = resolveDoh(u.host)
+                        if (dohIp != null && dohIp != u.host) {
+                            r = announceOnceAtIp(url, dohIp, infohash, pid, port)
+                            done = true
+                        }
+                        if (!done && u.scheme == "http") {
+                            val dnsIp = javaDNS(u.host)
+                            if (dnsIp != null && dnsIp != u.host) {
+                                r = announceOnceAtIp(url, dnsIp, infohash, pid, port)
+                                done = true
+                            }
+                        }
+                        if (!done) {
+                            r = announceOnce(url, infohash, pid, port)
+                        }
+                    }
+                    if (r != null) allPeers.addAll(r)
+                } catch (ignored: Exception) {
+                }
+            })
+        }
+        for (f in futures) {
+            try {
+                f.get(15, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (ignored: Exception) {
+            }
+        }
+        return allPeers.toList().distinct().filter { it.second in 1..65535 }
     }
 
     fun probeSources(): List<Pair<String, String>> {
@@ -394,7 +443,7 @@ object JavaTrackerAnnouncer {
     private val reachPool = java.util.concurrent.Executors.newFixedThreadPool(6)
     private val sourcePool = java.util.concurrent.Executors.newFixedThreadPool(8)
 
-    fun probeReachable(peers: List<Pair<String, Int>>): List<Pair<String, Int>> {
+    internal fun probeReachable(peers: List<Pair<String, Int>>): List<Pair<String, Int>> {
         if (peers.isEmpty()) return emptyList()
         val candidates = peers.distinct().take(24)
         val result = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, Int>>()
