@@ -442,6 +442,22 @@ object JavaTrackerAnnouncer {
 
     private val reachPool = java.util.concurrent.Executors.newFixedThreadPool(6)
     private val sourcePool = java.util.concurrent.Executors.newFixedThreadPool(8)
+    private val knownReachable = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    fun knownReachablePeers(): List<Pair<String, Int>> = synchronized(knownReachable) {
+        knownReachable.mapNotNull { key ->
+            try {
+                val parts = key.split(":")
+                if (parts.size == 2) parts[0] to parts[1].toInt() else null
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
+    fun clearKnownReachable() {
+        synchronized(knownReachable) { knownReachable.clear() }
+    }
 
     internal fun probeReachable(peers: List<Pair<String, Int>>): List<Pair<String, Int>> {
         if (peers.isEmpty()) return emptyList()
@@ -455,6 +471,7 @@ object JavaTrackerAnnouncer {
                     s = java.net.Socket()
                     s.connect(java.net.InetSocketAddress(ip, p), 3000)
                     result.add(ip to p)
+                    knownReachable.add("$ip:$p")
                 } catch (ignored: Exception) {
                 } finally {
                     try {

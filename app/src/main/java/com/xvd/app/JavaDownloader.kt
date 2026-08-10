@@ -35,10 +35,12 @@ object JavaDownloader {
                         TorrentEngine.recordJavaAnnounce("数据: 进度停滞, 等待后重试")
                     }
                     rounds++
-                    val peers = JavaTrackerAnnouncer.announceForPeers(hex)
-                    val reachable = JavaTrackerAnnouncer.probeReachable(peers)
+                    val known = JavaTrackerAnnouncer.knownReachablePeers()
+                    val fresh = JavaTrackerAnnouncer.announceForPeers(hex)
+                    val combined = (known + fresh).distinct().filter { it.second in 1..65535 }
+                    val reachable = JavaTrackerAnnouncer.probeReachable(combined)
                     if (reachable.isEmpty()) {
-                        TorrentEngine.recordJavaAnnounce("数据: 本轮无可达peer (共${peers.size}个)")
+                        TorrentEngine.recordJavaAnnounce("数据: 本轮无可达peer (已知${known.size} 新${fresh.size})")
                         Thread.sleep(10000)
                         continue
                     }
@@ -47,8 +49,9 @@ object JavaDownloader {
                     for ((ip, p) in reachable) {
                         val sess = JavaPeerClient.connectHandshake(ip, p, infohash, pid)
                         if (sess == null) continue
+                        TorrentEngine.recordJavaAnnounce("数据: 已连 $ip:$p, 开始下载")
                         try {
-                            val before = have
+                            val before = countHave(hex, td.infoHashes.size)
                             val ok = JavaPeerClient.downloadFromPeer(
                                 sess,
                                 td.pieceLength,
@@ -69,8 +72,11 @@ object JavaDownloader {
                                 completed = true
                                 break
                             }
-                            if (have < before) {
-                                TorrentEngine.recordJavaAnnounce("数据: $ip:$p 下载中断, 换peer")
+                            val after = countHave(hex, td.infoHashes.size)
+                            if (after > before) {
+                                TorrentEngine.recordJavaAnnounce("数据: $ip:$p 下载部分后中断, 已${after}片, 继续其他peer")
+                            } else {
+                                TorrentEngine.recordJavaAnnounce("数据: $ip:$p 无进展, 换peer")
                             }
                         } finally {
                             try {
