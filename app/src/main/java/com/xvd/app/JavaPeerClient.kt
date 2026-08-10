@@ -593,8 +593,9 @@ object JavaPeerClient {
     private fun isValidInfo(info: ByteArray): Boolean {
         return try {
             val decoded = bencodeDecode(info) as? Map<*, *> ?: return false
-            val sub = decoded["info"] as? Map<*, *> ?: return false
-            sub["pieces"] is ByteArray && sub["piece length"] is Long && sub["name"] != null
+            decoded["pieces"] is ByteArray &&
+                decoded["piece length"] is Long &&
+                decoded["name"] != null
         } catch (e: Exception) {
             false
         }
