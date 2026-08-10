@@ -85,7 +85,7 @@ object JavaPeerClient {
         return try {
             socket = Socket()
             socket.connect(InetSocketAddress(ip, port), 5000)
-            socket.soTimeout = 10000
+            socket.soTimeout = 15000
             socket.tcpNoDelay = true
             val sess = Session(socket.getInputStream(), socket.getOutputStream(), null, null, Pending(), false)
             sess.output.write(buildHandshake(infohash, peerId))
@@ -107,7 +107,7 @@ object JavaPeerClient {
         return try {
             socket = Socket()
             socket.connect(InetSocketAddress(ip, port), 5000)
-            socket.soTimeout = 10000
+            socket.soTimeout = 15000
             socket.tcpNoDelay = true
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
@@ -198,7 +198,7 @@ object JavaPeerClient {
         var got = false
         var requested = false
         val pieces = mutableMapOf<Int, ByteArray>()
-        val deadline = System.currentTimeMillis() + 15000
+        val deadline = System.currentTimeMillis() + 30000
         while (System.currentTimeMillis() < deadline) {
             if (got && !requested) {
                 requested = true

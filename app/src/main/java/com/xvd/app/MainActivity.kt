@@ -190,8 +190,8 @@ class MainActivity : AppCompatActivity() {
         )
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        val ignored = pm.isIgnoringBatteryOptimizations(packageName)
-        batteryStatus.text = if (ignored) "电池优化：已忽略" else "电池优化：未忽略"
+        val ignored = BackgroundRun.isExempt(this)
+        batteryStatus.text = if (ignored) "允许后台：已开启" else "允许后台：未开启"
         batteryStatus.setTextColor(
             ContextCompat.getColor(this,
                 if (ignored) android.R.color.holo_green_dark else android.R.color.holo_red_dark)
@@ -215,19 +215,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestBatteryOptimization() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+        if (BackgroundRun.requestExempt(this)) {
             refreshPermissionStatus()
-            return
-        }
-        try {
-            startActivity(
-                Intent(
-                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                    Uri.parse("package:$packageName")
-                )
-            )
-        } catch (e: Exception) {
+        } else {
             DownloadBus.addLog("请手动在系统设置中关闭电池优化")
         }
     }

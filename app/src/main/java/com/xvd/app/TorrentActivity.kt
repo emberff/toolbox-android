@@ -68,6 +68,10 @@ class TorrentActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.btnNetworkTest).setOnClickListener { runNetworkTest() }
         findViewById<MaterialButton>(R.id.btnProxy).setOnClickListener { showProxyDialog() }
         findViewById<MaterialButton>(R.id.btnDiagnose).setOnClickListener { runDiagnostics() }
+        findViewById<MaterialButton>(R.id.btnBackground).setOnClickListener {
+            BackgroundRun.requestExempt(this)
+            refreshBackgroundStatus()
+        }
 
         adapter = TorrentAdapter(
             emptyList(),
@@ -132,7 +136,20 @@ class TorrentActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshStorageStatus()
+        refreshBackgroundStatus()
         if (TorrentManager.torrents.value.isNotEmpty()) ensureService()
+    }
+
+    private fun refreshBackgroundStatus() {
+        val tv = findViewById<TextView>(R.id.tvBackgroundStatus)
+        val exempt = BackgroundRun.isExempt(this)
+        tv.text = BackgroundRun.statusText(this)
+        tv.setTextColor(
+            ContextCompat.getColor(
+                this,
+                if (exempt) android.R.color.holo_green_dark else android.R.color.holo_red_dark
+            )
+        )
     }
 
     private fun addMagnet() {
