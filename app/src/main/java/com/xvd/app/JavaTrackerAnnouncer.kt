@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object JavaTrackerAnnouncer {
 
-    private const val HTTP_TRACKERS = "http://tracker.dler.org:80/announce,http://tracker.dler.org:80/announce,http://tracker.dler.org:80/announce,http://tracker.openbittorrent.com:80/announce,https://tracker.dler.org:443/announce,https://tracker.opentrackr.org:443/announce,https://tracker.bittor.pw:443/announce"
+    private const val HTTP_TRACKERS = "http://tracker.dler.org:80/announce,http://tracker.dler.org:80/announce,http://tracker.dler.org:80/announce,http://tracker.opentrackr.org:1337/announce,http://tracker.openbittorrent.com:80/announce,https://tracker.dler.org:443/announce,https://tracker.opentrackr.org:443/announce,https://tracker.bittor.pw:443/announce"
 
     private const val UDP_TRACKERS = "udp://tracker.dler.org:6969,udp://tracker.opentrackr.org:1337,udp://open.demonii.com:1337,udp://tracker.openbittorrent.com:6969,udp://exodus.desync.com:6969,udp://explodie.org:6969"
 
@@ -68,10 +68,20 @@ object JavaTrackerAnnouncer {
                                 r = udpAnnounceOnce(url, infohash, pid, port)
                             } else if (url.contains("://")) {
                                 val u = java.net.URI(url)
-                                val ip = resolveDoh(u.host)
-                                if (ip != null && ip != u.host) {
-                                    r = announceOnceAtIp(url, ip, infohash, pid, port)
-                                } else {
+                                var done = false
+                                val dohIp = resolveDoh(u.host)
+                                if (dohIp != null && dohIp != u.host) {
+                                    r = announceOnceAtIp(url, dohIp, infohash, pid, port)
+                                    done = true
+                                }
+                                if (!done && u.scheme == "http") {
+                                    val dnsIp = javaDNS(u.host)
+                                    if (dnsIp != null && dnsIp != u.host) {
+                                        r = announceOnceAtIp(url, dnsIp, infohash, pid, port)
+                                        done = true
+                                    }
+                                }
+                                if (!done) {
                                     r = announceOnce(url, infohash, pid, port)
                                 }
                             }
@@ -233,6 +243,19 @@ object JavaTrackerAnnouncer {
             return i
         }
         return -1
+    }
+
+    private fun javaDNS(host: String): String? {
+        return try {
+            val addrs = java.net.InetAddress.getAllByName(host)
+            addrs.firstOrNull { a ->
+                val ip = a.hostAddress
+                ip != null && !ip.startsWith("198.18.") && !ip.startsWith("198.19.") &&
+                    a is java.net.Inet4Address && !ip.startsWith("0.") && !ip.startsWith("127.")
+            }?.hostAddress
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun resolveDoh(host: String): String? {

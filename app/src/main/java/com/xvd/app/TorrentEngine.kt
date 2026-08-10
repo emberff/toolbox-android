@@ -74,7 +74,7 @@ object TorrentEngine {
     fun recordJavaAnnounce(msg: String) {
         synchronized(_javaAnnounceLog) {
             _javaAnnounceLog.addLast(msg)
-            while (_javaAnnounceLog.size > 24) _javaAnnounceLog.removeFirst()
+            while (_javaAnnounceLog.size > 30) _javaAnnounceLog.removeFirst()
         }
     }
 

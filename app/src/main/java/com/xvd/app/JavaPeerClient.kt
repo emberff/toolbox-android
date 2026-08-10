@@ -39,10 +39,12 @@ object JavaPeerClient {
                     executor.submit {
                         if (success.get()) return@submit
                         try {
-                            val info = fetchFromPeer(ip, p, infohash, peerId)
+                            val (info, reason) = fetchFromPeer(ip, p, infohash, peerId)
                             if (info != null && success.compareAndSet(false, true)) {
                                 TorrentEngine.recordJavaAnnounce("元数据: 抓取成功 ${info.size}字节 ($ip:$p)")
                                 TorrentManager.adoptTorrentFile(hex, info)
+                            } else {
+                                TorrentEngine.recordJavaAnnounce("元数据: $ip:$p → $reason")
                             }
                         } catch (e: Exception) {
                         }
@@ -66,34 +68,50 @@ object JavaPeerClient {
         val encrypted: Boolean
     )
 
-    private fun fetchFromPeer(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray): ByteArray? {
+    private fun fetchFromPeer(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray): Pair<ByteArray?, String> {
+        val encStage = java.util.Collections.synchronizedList(mutableListOf<String>())
         val enc = try {
-            fetchEncrypted(ip, port, infohash, peerId)
+            fetchEncrypted(ip, port, infohash, peerId, encStage)
         } catch (e: Exception) {
+            encStage.add("加密异常:${e.message ?: "?"}")
             null
         }
-        if (enc != null) return enc
-        return try {
-            fetchPlain(ip, port, infohash, peerId)
+        if (enc != null) return Pair(enc, "加密成功")
+        val plainStage = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val plain = try {
+            fetchPlain(ip, port, infohash, peerId, plainStage)
         } catch (e: Exception) {
+            plainStage.add("明文异常:${e.message ?: "?"}")
             null
         }
+        if (plain != null) return Pair(plain, "明文成功")
+        return Pair(null, "加密[${encStage.joinToString(">")}] 明文[${plainStage.joinToString(">")}]")
     }
 
-    private fun fetchPlain(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray): ByteArray? {
+    private fun fetchPlain(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>): ByteArray? {
         var socket: Socket? = null
         return try {
             socket = Socket()
             socket.connect(InetSocketAddress(ip, port), 5000)
             socket.soTimeout = 15000
             socket.tcpNoDelay = true
+            stage.add("已连接")
             val sess = Session(socket.getInputStream(), socket.getOutputStream(), null, null, Pending(), false)
             sess.output.write(buildHandshake(infohash, peerId))
             sess.output.flush()
-            val reply = readDecrypted(sess, 68) ?: return null
-            if (reply[0].toInt() != 19 || reply[1].toInt() != 'B'.code || reply[2].toInt() != 'i'.code) return null
-            if (!reply.copyOfRange(28, 48).contentEquals(infohash)) return null
-            metadataExchange(sess, infohash, peerId)
+            val reply = readDecrypted(sess, 68) ?: run { stage.add("握手无响应"); return null }
+            if (reply[0].toInt() != 19 || reply[1].toInt() != 'B'.code || reply[2].toInt() != 'i'.code) {
+                stage.add("握手非法")
+                return null
+            }
+            if (!reply.copyOfRange(28, 48).contentEquals(infohash)) {
+                stage.add("infohash不符")
+                return null
+            }
+            stage.add("握手完成")
+            val info = metadataExchange(sess, infohash, peerId, stage)
+            if (info == null) stage.add("未获元数据")
+            info
         } finally {
             try {
                 socket?.close()
@@ -102,7 +120,7 @@ object JavaPeerClient {
         }
     }
 
-    private fun fetchEncrypted(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray): ByteArray? {
+    private fun fetchEncrypted(ip: String, port: Int, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>): ByteArray? {
         var socket: Socket? = null
         return try {
             socket = Socket()
@@ -111,6 +129,7 @@ object JavaPeerClient {
             socket.tcpNoDelay = true
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
+            stage.add("已连接")
 
             val rnd = java.security.SecureRandom()
             val prime = BigInteger(1, hexToBytes(DH_PRIME_HEX))
@@ -124,6 +143,7 @@ object JavaPeerClient {
 
             val peerPub = ByteArray(96)
             readExact(input, peerPub, 0, 96)
+            stage.add("已收peerDH")
             val peerKey = BigInteger(1, peerPub)
             if (peerKey < BigInteger.TWO || peerKey >= prime - BigInteger.ONE) return null
             val shared = peerKey.modPow(secret, prime)
@@ -178,11 +198,19 @@ object JavaPeerClient {
             val pending = Pending()
             val hp = 14 + lenPad
             if (tail2.size > hp) pending.add(tail2, hp, tail2.size - hp)
-            val peerHs = readDecrypted(Session(input, output, enc, dec, pending, rc4Mode), 68) ?: return null
-            if (peerHs[0].toInt() != 19) return null
-            if (!peerHs.copyOfRange(28, 48).contentEquals(infohash)) return null
-
-            metadataExchange(Session(input, output, enc, dec, pending, rc4Mode), infohash, peerId)
+            val peerHs = readDecrypted(Session(input, output, enc, dec, pending, rc4Mode), 68) ?: run { stage.add("等握手无响应"); return null }
+            if (peerHs[0].toInt() != 19) {
+                stage.add("握手非法")
+                return null
+            }
+            if (!peerHs.copyOfRange(28, 48).contentEquals(infohash)) {
+                stage.add("infohash不符")
+                return null
+            }
+            stage.add("握手完成")
+            val info = metadataExchange(Session(input, output, enc, dec, pending, rc4Mode), infohash, peerId, stage)
+            if (info == null) stage.add("未获元数据")
+            info
         } finally {
             try {
                 socket?.close()
@@ -191,7 +219,7 @@ object JavaPeerClient {
         }
     }
 
-    private fun metadataExchange(sess: Session, infohash: ByteArray, peerId: ByteArray): ByteArray? {
+    private fun metadataExchange(sess: Session, infohash: ByteArray, peerId: ByteArray, stage: MutableList<String>): ByteArray? {
         sendMessage(sess, 20, byteArrayOf(0) + "d1:md11:ut_metadatai1eee".toByteArray(Charsets.US_ASCII))
         var metadataSize = -1
         var utMetadata = -1
@@ -229,8 +257,11 @@ object JavaPeerClient {
             }
         }
         if (pieces.isEmpty()) return null
-        val info = assemble(metadataSize, pieces) ?: return null
-        if (!isValidInfo(info)) return null
+        val info = assemble(metadataSize, pieces) ?: run { stage.add("拼装失败"); return null }
+        if (!isValidInfo(info)) {
+            stage.add("校验失败")
+            return null
+        }
         return info
     }
 
