@@ -22,10 +22,10 @@ object JavaDownloader {
             try {
                 val td = loadTorrent(hex)
                 if (td == null) {
-                    TorrentEngine.recordJavaAnnounce("数据: 无法读取torrent文件")
+                    TorrentEngine.recordDownload("数据: 无法读取torrent文件")
                     return@Thread
                 }
-                TorrentEngine.recordJavaAnnounce("数据: 下载器启动 ${td.infoHashes.size}片 片长${td.pieceLength}")
+                TorrentEngine.recordDownload("数据: 下载器启动 ${td.infoHashes.size}片 片长${td.pieceLength}")
                 val infohash = JavaPeerClient.hexToBytes(hex)
                 val pid = JavaTrackerAnnouncer.peerId()
                 val budget = System.currentTimeMillis() + 30 * 60 * 1000L
@@ -33,11 +33,11 @@ object JavaDownloader {
                 while (System.currentTimeMillis() < budget) {
                     val have = countHave(hex, td.infoHashes.size)
                     if (have >= td.infoHashes.size) {
-                        TorrentEngine.recordJavaAnnounce("数据: 全部${td.infoHashes.size}片已下载")
+                        TorrentEngine.recordDownload("数据: 全部${td.infoHashes.size}片已下载")
                         return@Thread
                     }
                     if (rounds > 0 && have == 0) {
-                        TorrentEngine.recordJavaAnnounce("数据: 进度停滞, 等待后重试")
+                        TorrentEngine.recordDownload("数据: 进度停滞, 等待后重试")
                     }
                     rounds++
                     val known = JavaTrackerAnnouncer.knownReachablePeers()
@@ -45,19 +45,19 @@ object JavaDownloader {
                     val combined = (known + fresh).distinct().filter { it.second in 1..65535 }
                     val reachable = JavaTrackerAnnouncer.probeReachable(combined)
                     if (reachable.isEmpty()) {
-                        TorrentEngine.recordJavaAnnounce("数据: 本轮无可达peer (已知${known.size} 新${fresh.size})")
+                        TorrentEngine.recordDownload("数据: 本轮无可达peer (已知${known.size} 新${fresh.size})")
                         Thread.sleep(10000)
                         continue
                     }
-                    TorrentEngine.recordJavaAnnounce("数据: 可达${reachable.size}个, 开始下载 (已有$have/${td.infoHashes.size})")
+                    TorrentEngine.recordDownload("数据: 可达${reachable.size}个, 开始下载 (已有$have/${td.infoHashes.size})")
                     var completed = false
                     for ((ip, p) in reachable) {
                         val sess = JavaPeerClient.connectHandshake(ip, p, infohash, pid)
                         if (sess == null) {
-                            TorrentEngine.recordJavaAnnounce("数据: $ip:$p 握手失败")
+                            TorrentEngine.recordDownload("数据: $ip:$p 握手失败")
                             continue
                         }
-                        TorrentEngine.recordJavaAnnounce("数据: 已连 $ip:$p, 开始下载")
+                        TorrentEngine.recordDownload("数据: 已连 $ip:$p, 开始下载")
                         try {
                             val before = countHave(hex, td.infoHashes.size)
                             val ok = JavaPeerClient.downloadFromPeer(
@@ -66,13 +66,13 @@ object JavaDownloader {
                                 td.totalSize,
                                 td.infoHashes,
                                 havePieces = { i -> isHave(hex, i) },
-                                onStatus = { s -> TorrentEngine.recordJavaAnnounce("数据: $ip:$p $s") },
+                                onStatus = { s -> TorrentEngine.recordDownload("数据: $ip:$p $s") },
                                 onPiece = { piece, data ->
                                     val ok = addPiece(hex, piece, data)
                                     if (ok) downloadedPieces[piece] = true
                                     val cur = downloadedPieces.size
                                     if (cur % 20 == 0) {
-                                        TorrentEngine.recordJavaAnnounce("数据: 已下载$cur/${td.infoHashes.size}片")
+                                        TorrentEngine.recordDownload("数据: 已下载$cur/${td.infoHashes.size}片")
                                     }
                                     ok
                                 }
@@ -83,9 +83,9 @@ object JavaDownloader {
                             }
                             val after = countHave(hex, td.infoHashes.size)
                             if (after > before) {
-                                TorrentEngine.recordJavaAnnounce("数据: $ip:$p 下载部分后中断, 已${after}片, 继续其他peer")
+                                TorrentEngine.recordDownload("数据: $ip:$p 下载部分后中断, 已${after}片, 继续其他peer")
                             } else {
-                                TorrentEngine.recordJavaAnnounce("数据: $ip:$p 无进展, 换peer")
+                                TorrentEngine.recordDownload("数据: $ip:$p 无进展, 换peer")
                             }
                         } finally {
                             try {
@@ -95,14 +95,14 @@ object JavaDownloader {
                         }
                     }
                     if (completed) {
-                        TorrentEngine.recordJavaAnnounce("数据: 下载完成")
+                        TorrentEngine.recordDownload("数据: 下载完成")
                         return@Thread
                     }
                     Thread.sleep(10000)
                 }
-                TorrentEngine.recordJavaAnnounce("数据: 超时结束")
+                TorrentEngine.recordDownload("数据: 超时结束")
             } catch (e: Exception) {
-                TorrentEngine.recordJavaAnnounce("数据: 异常 ${e.message}")
+                TorrentEngine.recordDownload("数据: 异常 ${e.message}")
             } finally {
                 running.set(false)
             }
@@ -152,7 +152,7 @@ object JavaDownloader {
             h.swig().add_piece_bytes(piece, bv)
             true
         } catch (e: Exception) {
-            TorrentEngine.recordJavaAnnounce("数据: add_piece异常 片$piece ${e.message}")
+            TorrentEngine.recordDownload("数据: add_piece异常 片$piece ${e.message}")
             false
         }
     }

@@ -296,6 +296,11 @@ object TorrentManager {
                 sb.append("java上报记录(${jl.size}):\n")
                 for (e in jl) sb.append("  · $e\n")
             }
+            val dlog = TorrentEngine.downloadLog
+            if (dlog.isNotEmpty()) {
+                sb.append("数据下载记录(${dlog.size}):\n")
+                for (e in dlog) sb.append("  · $e\n")
+            }
             val dl = TorrentEngine.debugAlerts
             if (dl.isNotEmpty()) {
                 sb.append("连接活动(${dl.size}):\n")

@@ -47,6 +47,8 @@ object TorrentEngine {
 
     private val _javaAnnounceLog = ArrayDeque<String>()
 
+    private val _downloadLog = ArrayDeque<String>()
+
     private val _debugAlerts = ArrayDeque<String>()
 
     val engineErrors: List<String>
@@ -54,6 +56,9 @@ object TorrentEngine {
 
     val javaAnnounceLog: List<String>
         get() = synchronized(_javaAnnounceLog) { _javaAnnounceLog.toList() }
+
+    val downloadLog: List<String>
+        get() = synchronized(_downloadLog) { _downloadLog.toList() }
 
     val debugAlerts: List<String>
         get() = synchronized(_debugAlerts) { _debugAlerts.toList() }
@@ -75,6 +80,13 @@ object TorrentEngine {
         synchronized(_javaAnnounceLog) {
             _javaAnnounceLog.addLast(msg)
             while (_javaAnnounceLog.size > 30) _javaAnnounceLog.removeFirst()
+        }
+    }
+
+    fun recordDownload(msg: String) {
+        synchronized(_downloadLog) {
+            _downloadLog.addLast(msg)
+            while (_downloadLog.size > 30) _downloadLog.removeFirst()
         }
     }
 
